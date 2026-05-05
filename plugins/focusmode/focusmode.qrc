@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/focusmode">
+        <file>focus.png</file>
+    </qresource>
+</RCC>

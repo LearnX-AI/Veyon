@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/broadcast">
+        <file>announcement.png</file>
+        <file>urgent.png</file>
+        <file>emergency.png</file>
+    </qresource>
+</RCC>
