@@ -7,7 +7,11 @@ Run locally with:
 
 import logging
 
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -66,6 +70,16 @@ def create_app() -> FastAPI:
 
     # All real routes live under /api/v1/...
     app.include_router(api_router)
+
+    # ---- Static dashboard ----
+    static_dir = Path(__file__).parent.parent / "static"
+    if static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+        @app.get("/", include_in_schema=False)
+        def dashboard() -> FileResponse:
+            """Serve the admin dashboard."""
+            return FileResponse(static_dir / "index.html")
 
     return app
 
