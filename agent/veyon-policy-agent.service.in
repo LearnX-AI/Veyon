@@ -20,7 +20,7 @@ Restart=on-failure
 RestartSec=5
 
 # Hardening (limit damage if the agent is ever exploited)
-ProtectSystem=full
+ProtectSystem=false
 ReadWritePaths=/etc/hosts /etc/veyon-policy-agent
 NoNewPrivileges=true
 ProtectKernelTunables=true
