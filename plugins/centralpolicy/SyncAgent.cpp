@@ -3,12 +3,14 @@
  */
 
 #include "SyncAgent.h"
+#include "CentralPolicyHooks.h"
 #include "CentralPolicyConfiguration.h"
 #include "HttpClient.h"
 
 #include "VeyonConfiguration.h"
 
 #include <QHostInfo>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QTimer>
@@ -147,8 +149,8 @@ void SyncAgent::sendHeartbeat()
         {
             qInfo() << "[CentralPolicy] Blocklist version changed:"
                     << m_localBlocklistVersion << "->" << serverVersion;
-            m_localBlocklistVersion = serverVersion;
-            Q_EMIT blocklistChanged( serverVersion );
+            // Pull the new list, then emit the rich signal once we have it.
+            fetchBlocklist( serverVersion );
         }
 
         if( serverFocusActive != m_localFocusModeActive )
@@ -156,7 +158,43 @@ void SyncAgent::sendHeartbeat()
             qInfo() << "[CentralPolicy] Focus Mode state changed:"
                     << m_localFocusModeActive << "->" << serverFocusActive;
             m_localFocusModeActive = serverFocusActive;
-            Q_EMIT focusModeStateChanged( serverFocusActive );
+            CentralPolicyHooks::notifyFocusStateChanged( serverFocusActive );
         }
+    });
+}
+
+
+
+void SyncAgent::fetchBlocklist( int newVersion )
+{
+    m_http->get( QStringLiteral("/api/v1/blocklist"),
+                 [this, newVersion]( const HttpClient::Response& r ) {
+        if( !r.ok )
+        {
+            qWarning() << "[CentralPolicy] Failed to fetch blocklist (HTTP"
+                       << r.statusCode << "):" << r.errorString;
+            return;
+        }
+
+        QStringList domains;
+        if( r.json.isArray() )
+        {
+            const auto arr = r.json.toArray();
+            for( const QJsonValue& v : arr )
+            {
+                const auto obj = v.toObject();
+                const QString d = obj.value(QStringLiteral("domain")).toString();
+                if( !d.isEmpty() )
+                {
+                    domains.append( d );
+                }
+            }
+        }
+
+        qInfo() << "[CentralPolicy] Pulled" << domains.size()
+                << "domains for version" << newVersion;
+
+        m_localBlocklistVersion = newVersion;
+        CentralPolicyHooks::notifyBlocklistChanged( domains, newVersion );
     });
 }

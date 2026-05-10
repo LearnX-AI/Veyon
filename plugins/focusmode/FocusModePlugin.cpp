@@ -1,14 +1,21 @@
 /*
- * FocusModePlugin.cpp - server- and master-side logic for Smart Focus Mode
+ * FocusModePlugin.cpp - server- and master-side logic for Smart Focus Mode.
+ *
+ * v1.1: subscribes via CentralPolicyHooks (in veyon-core) for live
+ *       blocklist and focus-state updates. Falls back to the local
+ *       blocklist file when no central server is configured.
  */
 
 #include "BlocklistLoader.h"
+#include "CentralPolicyHooks.h"
 #include "ComputerControlInterface.h"
 #include "FeatureMessage.h"
 #include "FocusModePlugin.h"
 #include "HostsFileManager.h"
 #include "VeyonMasterInterface.h"
 #include "VeyonServerInterface.h"
+
+#include <QPointer>
 
 
 FocusModePlugin::FocusModePlugin( QObject* parent ) :
@@ -23,8 +30,10 @@ FocusModePlugin::FocusModePlugin( QObject* parent ) :
         tr("Activates Smart Focus Mode on selected student computers, "
            "blocking distracting websites such as social media."),
         QStringLiteral(":/focusmode/focus.png") ),
-    m_features( { m_focusModeFeature } )
+    m_features( { m_focusModeFeature } ),
+    m_focusActive( false )
 {
+    subscribeToCentralPolicy();
 }
 
 
@@ -76,7 +85,6 @@ bool FocusModePlugin::stopFeature( VeyonMasterInterface& /*master*/,
 }
 
 
-// Master-side incoming message handler (we don't expect any from server here)
 bool FocusModePlugin::handleFeatureMessage( ComputerControlInterface::Pointer /*ccp*/,
                                             const FeatureMessage& /*message*/ )
 {
@@ -84,7 +92,6 @@ bool FocusModePlugin::handleFeatureMessage( ComputerControlInterface::Pointer /*
 }
 
 
-// SERVER-SIDE handler: this is what runs on the student machine.
 bool FocusModePlugin::handleFeatureMessage( VeyonServerInterface& /*server*/,
                                             const MessageContext& /*messageContext*/,
                                             const FeatureMessage& message )
@@ -94,8 +101,6 @@ bool FocusModePlugin::handleFeatureMessage( VeyonServerInterface& /*server*/,
         return false;
     }
 
-    HostsFileManager hostsMgr;
-
     if( message.command() == static_cast<FeatureMessage::Command>(EnableFocusMode) )
     {
         const QStringList domains = BlocklistLoader::load();
@@ -104,28 +109,97 @@ bool FocusModePlugin::handleFeatureMessage( VeyonServerInterface& /*server*/,
             vWarning() << "FocusMode: blocklist is empty or unreadable - nothing to block";
             return true;
         }
+        return applyOrClear( true, domains );
+    }
 
+    if( message.command() == static_cast<FeatureMessage::Command>(DisableFocusMode) )
+    {
+        return applyOrClear( false, {} );
+    }
+
+    return false;
+}
+
+
+// =============================================================
+// CentralPolicy integration via core hooks
+// =============================================================
+
+bool FocusModePlugin::applyOrClear( bool enable, const QStringList& domains )
+{
+    HostsFileManager hostsMgr;
+
+    if( enable )
+    {
         if( hostsMgr.applyBlocklist( domains ) == false )
         {
             vCritical() << "FocusMode: failed to apply blocklist:" << hostsMgr.lastError();
             return false;
         }
-
+        m_focusActive = true;
         vInfo() << "FocusMode: ENABLED. Blocked" << domains.size() << "domains.";
         return true;
     }
 
-    if( message.command() == static_cast<FeatureMessage::Command>(DisableFocusMode) )
+    if( hostsMgr.clearBlocklist() == false )
     {
-        if( hostsMgr.clearBlocklist() == false )
-        {
-            vCritical() << "FocusMode: failed to clear blocklist:" << hostsMgr.lastError();
-            return false;
-        }
-
-        vInfo() << "FocusMode: DISABLED.";
-        return true;
+        vCritical() << "FocusMode: failed to clear blocklist:" << hostsMgr.lastError();
+        return false;
     }
+    m_focusActive = false;
+    vInfo() << "FocusMode: DISABLED.";
+    return true;
+}
 
-    return false;
+
+void FocusModePlugin::subscribeToCentralPolicy()
+{
+    // QPointer makes the lambda safe even if 'this' is destroyed before
+    // CentralPolicy notifies. The lambda no-ops in that case.
+    QPointer<FocusModePlugin> self( this );
+
+    CentralPolicyHooks::registerBlocklistHandler(
+        [self]( const QStringList& domains, int version ) {
+            if( self.isNull() )
+            {
+                return;
+            }
+            vInfo() << "FocusMode: received" << domains.size()
+                    << "domains from CentralPolicy (version" << version << ")";
+
+            // Persist locally for offline / reboot survival.
+            BlocklistLoader::save( domains );
+
+            // If focus is active, re-apply with the new list.
+            if( self->m_focusActive )
+            {
+                self->applyOrClear( true, domains );
+            }
+        });
+
+    CentralPolicyHooks::registerFocusStateHandler(
+        [self]( bool enabled ) {
+            if( self.isNull() )
+            {
+                return;
+            }
+            vInfo() << "FocusMode: CentralPolicy requests focus mode:" << enabled;
+
+            if( enabled == self->m_focusActive )
+            {
+                return;
+            }
+
+            if( enabled )
+            {
+                const QStringList domains = BlocklistLoader::load();
+                self->applyOrClear( true, domains );
+            }
+            else
+            {
+                self->applyOrClear( false, {} );
+            }
+        });
+
+    vInfo() << "FocusMode: subscribed to CentralPolicy hooks.";
 }

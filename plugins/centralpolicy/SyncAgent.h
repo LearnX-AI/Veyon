@@ -5,15 +5,16 @@
  *   start()  - registers with server (one-time), then starts heartbeat timer
  *   stop()   - stops the timer, no further requests sent
  *
- * State:
- *   m_localBlocklistVersion - what we last pulled from the server.
- *                              Bumped to match server version after a
- *                              successful sync.
+ * State changes detected during a heartbeat (new blocklist version,
+ * focus-mode toggle) are published via CentralPolicyHooks. Plugins
+ * (FocusMode etc.) subscribe through that registry, not through this
+ * class directly.
  */
 
 #pragma once
 
 #include <QObject>
+#include <QStringList>
 
 
 class HttpClient;
@@ -31,16 +32,8 @@ public:
     void start();
     void stop();
 
-    bool isRunning() const { return m_running; }
+    bool isRunning() const            { return m_running; }
     int localBlocklistVersion() const { return m_localBlocklistVersion; }
-
-Q_SIGNALS:
-    /// Emitted when the server reports a different blocklist version.
-    /// Subscribers (e.g. FocusMode) should re-pull the blocklist.
-    void blocklistChanged( int newVersion );
-
-    /// Emitted when the server reports a Focus Mode state change.
-    void focusModeStateChanged( bool enabled );
 
 private Q_SLOTS:
     void onHeartbeatTick();
@@ -48,6 +41,7 @@ private Q_SLOTS:
 private:
     void registerSelf();
     void sendHeartbeat();
+    void fetchBlocklist( int newVersion );
     void loadConfiguration();
 
     HttpClient* m_http;
