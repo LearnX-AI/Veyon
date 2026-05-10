@@ -1,19 +1,16 @@
 /*
  * FocusModePlugin.h - "Smart Focus Mode" feature plugin for Veyon
  *
- * Implements a website-blocking feature that the teacher can toggle
- * on/off from the Master GUI. When active, blocked domains (loaded
- * from /etc/veyon/focusmode-blocklist.txt) are written to /etc/hosts
- * with a 0.0.0.0 redirect, preventing browser access.
- *
- * Architecture:
- *   - Master side: shows toggle button, sends Start/Stop messages
- *   - Server side: receives messages, applies/clears /etc/hosts entries
+ * v1.1: subscribes to CentralPolicyHooks (in veyon-core) for live
+ *       blocklist and focus-state updates from the central server.
+ *       Falls back to the local blocklist file if no central server
+ *       is configured.
  */
 
 #pragma once
 
 #include <QObject>
+#include <QStringList>
 
 #include "Feature.h"
 #include "FeatureProviderInterface.h"
@@ -38,7 +35,7 @@ public:
         return Plugin::Uid{ QStringLiteral("c8e2f3a4-9d1b-4e5c-b6a7-d8e9f0123456") };
     }
 
-    QVersionNumber version() const override            { return QVersionNumber( 1, 0, 0 ); }
+    QVersionNumber version() const override            { return QVersionNumber( 1, 1, 0 ); }
     QString name() const override                      { return QStringLiteral("FocusMode"); }
     QString description() const override               { return tr( "Smart Focus Mode — application and website restriction" ); }
     QString vendor() const override                    { return QStringLiteral("PowerX Technologies"); }
@@ -74,6 +71,14 @@ private:
         DisableFocusMode,
     };
 
+    /// Apply or clear the blocklist on /etc/hosts.
+    bool applyOrClear( bool enable, const QStringList& domains );
+
+    /// Subscribe to CentralPolicy callbacks via the core registry.
+    void subscribeToCentralPolicy();
+
     Feature m_focusModeFeature;
     FeatureList m_features;
+
+    bool m_focusActive;
 };

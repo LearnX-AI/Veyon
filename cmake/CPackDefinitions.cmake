@@ -105,3 +105,13 @@ else()
 	set(CPACK_SOURCE_GENERATOR "TGZ")
 endif()
 
+
+# ---- Veyon Policy Agent: lifecycle scripts ----
+# These hook into the Debian package lifecycle so the agent service is
+# enabled/started on install and stopped on remove.
+set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+    "${CMAKE_SOURCE_DIR}/agent/postinst;${CMAKE_SOURCE_DIR}/agent/prerm;${CMAKE_SOURCE_DIR}/agent/postrm"
+)
+
+# Add init-system-helpers as a dependency since postinst uses deb-systemd-helper.
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "${CPACK_DEBIAN_PACKAGE_DEPENDS}, init-system-helpers (>= 1.52)")

@@ -22,6 +22,11 @@ public:
     /// @return list of domains (cleaned, deduplicated). Empty list on error.
     static QStringList load( const QString& path = QString::fromLatin1( DefaultPath ) );
 
+    /// Save the blocklist to disk. Atomic via temp-file rename.
+    /// @return true on success.
+    static bool save( const QStringList& domains,
+                      const QString& path = QString::fromLatin1( DefaultPath ) );
+
     /// Validate a single domain entry.
     /// Rejects entries with whitespace, schemes (http://), or paths (/foo).
     static bool isValidDomain( const QString& domain );

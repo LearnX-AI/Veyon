@@ -3,6 +3,7 @@
  */
 
 #include <QFile>
+#include <QSaveFile>
 #include <QSet>
 #include <QTextStream>
 
@@ -74,4 +75,31 @@ bool BlocklistLoader::isValidDomain( const QString& domain )
     if( domain.contains( QLatin1Char( '.' ) ) == false ) return false;
 
     return true;
+}
+
+
+bool BlocklistLoader::save( const QStringList& domains, const QString& path )
+{
+    // QSaveFile writes to a temp file and renames atomically on commit().
+    // This means a crash mid-write can never corrupt the existing file.
+    QSaveFile file( path );
+    if( file.open( QIODevice::WriteOnly | QIODevice::Text ) == false )
+    {
+        return false;
+    }
+
+    QTextStream out( &file );
+    out << "# Veyon Focus Mode blocklist - managed by CentralPolicy\n";
+    out << "# Do not edit by hand; changes will be overwritten on next sync.\n";
+    out << "\n";
+
+    for( const QString& d : domains )
+    {
+        if( isValidDomain( d ) )
+        {
+            out << d.toLower() << '\n';
+        }
+    }
+
+    return file.commit();
 }
