@@ -2,6 +2,7 @@
 #
 # Independent of veyon-server / veyon-service. Runs as a regular
 # Linux daemon and pulls policy from the central control server.
+# Packaged into the main veyon .deb so it auto-installs on every PC.
 
 cmake_minimum_required(VERSION 3.16)
 
@@ -37,8 +38,23 @@ target_link_libraries(veyon-policy-agent PRIVATE
     Qt${QT_MAJOR_VERSION}::Network
 )
 
-# Don't include in the main Veyon .deb - the agent has its own
-# installer (install.sh) and its own systemd unit.
-set_target_properties(veyon-policy-agent PROPERTIES
-    EXCLUDE_FROM_ALL FALSE
+# ---- Installation ----
+# These paths get baked into the .deb so 'apt install veyon.deb' lays
+# everything down system-wide.
+
+# Binary -> /usr/bin/veyon-policy-agent
+install(TARGETS veyon-policy-agent
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+# systemd unit -> /lib/systemd/system/veyon-policy-agent.service
+install(FILES veyon-policy-agent.service.in
+    DESTINATION /lib/systemd/system
+    RENAME veyon-policy-agent.service
+)
+
+# Example config -> /etc/veyon-policy-agent/config.example.conf
+# (Real config is created by the postinst script if not present.)
+install(FILES config.example.conf
+    DESTINATION /etc/veyon-policy-agent
 )
