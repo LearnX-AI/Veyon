@@ -1,0 +1,36 @@
+[Unit]
+Description=Veyon Policy Agent (central blocklist sync)
+Documentation=https://github.com/LearnX-AI/Veyon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Runs as root because /etc/hosts is root-owned.
+# Future revision: drop to a dedicated 'veyon-policy' user with a
+# narrowly-scoped capability (CAP_DAC_OVERRIDE) instead.
+User=root
+Group=root
+
+ExecStart=/usr/bin/veyon-policy-agent
+
+# Auto-restart on failure with a small backoff
+Restart=on-failure
+RestartSec=5
+
+# Hardening (limit damage if the agent is ever exploited)
+ProtectSystem=false
+ReadWritePaths=/etc/hosts /etc/veyon-policy-agent
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+PrivateTmp=true
+
+# stdout/stderr go to journald automatically
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

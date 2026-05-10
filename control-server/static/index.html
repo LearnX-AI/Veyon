@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Veyon Control Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+    <!-- Login overlay - shown until the user provides a valid token -->
+    <div id="login-overlay" class="login-overlay">
+        <form id="login-form" class="login-card" autocomplete="off">
+            <h1>Veyon Control</h1>
+            <p class="login-sub">Admin Dashboard</p>
+            <label for="token-input">API Token</label>
+            <input type="password" id="token-input" required autocomplete="off"
+                   placeholder="Enter your admin token">
+            <button type="submit">Sign in</button>
+            <p id="login-error" class="error"></p>
+        </form>
+    </div>
+
+    <!-- Main app -->
+    <div id="app" class="app hidden">
+        <header>
+            <h1>Veyon Control</h1>
+            <div class="header-meta">
+                <span id="status-pill" class="pill pill-ok">●&nbsp;Connected</span>
+                <button id="logout-btn" class="btn btn-ghost">Sign out</button>
+            </div>
+        </header>
+
+        <main>
+            <!-- Blocklist -->
+            <section class="panel">
+                <div class="panel-head">
+                    <h2>Blocklist</h2>
+                    <span id="blocklist-count" class="muted"></span>
+                </div>
+                <form id="add-domain-form" class="add-row">
+                    <input type="text" id="domain-input" placeholder="Domain to block (e.g. facebook.com)" required>
+                    <input type="text" id="note-input" placeholder="Note (optional)">
+                    <button type="submit" class="btn btn-primary">Add</button>
+                </form>
+                <ul id="blocklist" class="entry-list"></ul>
+            </section>
+
+            <!-- Machines -->
+            <section class="panel">
+                <div class="panel-head">
+                    <h2>Student Machines</h2>
+                    <span id="machines-count" class="muted"></span>
+                </div>
+                <ul id="machines" class="entry-list"></ul>
+            </section>
+
+            <!-- Audit log -->
+            <section class="panel panel-wide">
+                <div class="panel-head">
+                    <h2>Recent Activity</h2>
+                    <button id="refresh-log-btn" class="btn btn-ghost">Refresh</button>
+                </div>
+                <table class="log-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Action</th>
+                            <th>Target</th>
+                            <th>From</th>
+                        </tr>
+                    </thead>
+                    <tbody id="log-rows"></tbody>
+                </table>
+            </section>
+        </main>
+    </div>
+
+    <!-- Toast notifications -->
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

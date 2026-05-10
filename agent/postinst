@@ -1,0 +1,37 @@
+#!/bin/sh
+# Veyon Policy Agent - post-install script.
+# Runs after the .deb is unpacked. Reloads systemd and starts the service.
+# Service will fail until /etc/veyon-policy-agent/config.conf is configured -
+# this is intentional and matches the "auto-start, fail safe" model.
+
+set -e
+
+case "$1" in
+    configure)
+        # Ensure the config dir is locked down (root + system group only)
+        if [ -d /etc/veyon-policy-agent ]; then
+            chmod 750 /etc/veyon-policy-agent
+        fi
+
+        # Tell systemd about the new unit
+        if [ -d /run/systemd/system ]; then
+            deb-systemd-helper unmask veyon-policy-agent.service >/dev/null || true
+
+            # Enable on first install
+            if deb-systemd-helper --quiet was-enabled veyon-policy-agent.service; then
+                deb-systemd-helper enable veyon-policy-agent.service >/dev/null || true
+            else
+                deb-systemd-helper update-state veyon-policy-agent.service >/dev/null || true
+            fi
+
+            systemctl --system daemon-reload >/dev/null || true
+
+            # Start it now. If config is missing, service will exit and
+            # auto-restart per the unit's Restart=on-failure policy until
+            # an admin sets the config.
+            deb-systemd-invoke start veyon-policy-agent.service >/dev/null || true
+        fi
+        ;;
+esac
+
+exit 0

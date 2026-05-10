@@ -1,0 +1,23 @@
+#!/bin/sh
+# Veyon Policy Agent - post-removal script.
+# Cleans up systemd state when fully purged.
+
+set -e
+
+case "$1" in
+    purge)
+        if [ -d /run/systemd/system ]; then
+            deb-systemd-helper purge veyon-policy-agent.service >/dev/null || true
+            deb-systemd-helper unmask veyon-policy-agent.service >/dev/null || true
+        fi
+        # Remove config dir on purge (but not on remove)
+        rm -rf /etc/veyon-policy-agent
+        ;;
+    remove)
+        if [ -d /run/systemd/system ]; then
+            deb-systemd-helper mask veyon-policy-agent.service >/dev/null || true
+        fi
+        ;;
+esac
+
+exit 0

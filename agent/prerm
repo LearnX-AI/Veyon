@@ -1,0 +1,15 @@
+#!/bin/sh
+# Veyon Policy Agent - pre-removal script.
+# Stops the service before files are removed.
+
+set -e
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        if [ -d /run/systemd/system ]; then
+            deb-systemd-invoke stop veyon-policy-agent.service >/dev/null || true
+        fi
+        ;;
+esac
+
+exit 0
