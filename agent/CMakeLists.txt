@@ -23,6 +23,8 @@ add_executable(veyon-policy-agent
     HostsWriter.h
     ConfigLoader.cpp
     ConfigLoader.h
+    FileDownloader.cpp
+    FileDownloader.h
     # Reuse HttpClient from the centralpolicy plugin - same code,
     # no duplication.
     ${CMAKE_SOURCE_DIR}/plugins/centralpolicy/HttpClient.cpp
@@ -39,22 +41,15 @@ target_link_libraries(veyon-policy-agent PRIVATE
 )
 
 # ---- Installation ----
-# These paths get baked into the .deb so 'apt install veyon.deb' lays
-# everything down system-wide.
-
-# Binary -> /usr/bin/veyon-policy-agent
 install(TARGETS veyon-policy-agent
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-# systemd unit -> /lib/systemd/system/veyon-policy-agent.service
 install(FILES veyon-policy-agent.service.in
     DESTINATION /lib/systemd/system
     RENAME veyon-policy-agent.service
 )
 
-# Example config -> /etc/veyon-policy-agent/config.example.conf
-# (Real config is created by the postinst script if not present.)
 install(FILES config.example.conf
     DESTINATION /etc/veyon-policy-agent
 )

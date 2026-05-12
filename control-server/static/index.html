@@ -55,6 +55,28 @@
                 <ul id="machines" class="entry-list"></ul>
             </section>
 
+
+            <!-- Files -->
+            <section class="panel panel-wide">
+                <div class="panel-head">
+                    <h2>Files</h2>
+                    <span id="files-summary" class="muted"></span>
+                </div>
+                <form id="upload-form" class="upload-row" autocomplete="off">
+                    <label class="file-input-label" for="file-input">
+                        <span id="file-input-label-text">Choose file...</span>
+                    </label>
+                    <input type="file" id="file-input" required>
+                    <input type="text" id="file-note-input" placeholder="Note (optional)">
+                    <button type="submit" id="upload-btn" class="btn btn-primary">Upload</button>
+                </form>
+                <div id="upload-progress" class="upload-progress hidden">
+                    <div class="upload-progress-bar"><span id="upload-progress-fill"></span></div>
+                    <span id="upload-progress-label"></span>
+                </div>
+                <ul id="files-list" class="entry-list file-list"></ul>
+            </section>
+
             <!-- Audit log -->
             <section class="panel panel-wide">
                 <div class="panel-head">
@@ -74,6 +96,24 @@
                 </table>
             </section>
         </main>
+    </div>
+
+
+    <!-- Distribute dialog -->
+    <div id="distribute-dialog" class="modal-overlay hidden">
+        <div class="modal-card">
+            <h3 id="distribute-dialog-title">Distribute file</h3>
+            <p class="muted" id="distribute-dialog-sub"></p>
+            <div class="distribute-toolbar">
+                <button type="button" class="btn btn-ghost" id="distribute-select-all">Select all</button>
+                <button type="button" class="btn btn-ghost" id="distribute-clear">Clear</button>
+            </div>
+            <ul id="distribute-machine-list" class="distribute-machines"></ul>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-ghost" id="distribute-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" id="distribute-send">Send</button>
+            </div>
+        </div>
     </div>
 
     <!-- Toast notifications -->

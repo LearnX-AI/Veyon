@@ -5,11 +5,9 @@
  *   start()  - reads config, registers with server, starts heartbeat timer
  *   stop()   - stops the timer
  *
- * The heartbeat tick:
- *   1. POST /api/v1/machines/heartbeat with current_blocklist_version
- *   2. If server's blocklist_version != ours -> GET /api/v1/blocklist
- *      and apply via HostsWriter
- *   3. Update last_focus_active for completeness
+ * Two independent timers run in parallel:
+ *   - Heartbeat (default 30s): blocklist + focus mode sync
+ *   - File check (default 10s): pulls and applies any pending file deliveries
  */
 
 #pragma once
@@ -17,10 +15,12 @@
 #include <QObject>
 
 #include "ConfigLoader.h"
+#include "FileDownloader.h"
 #include "HostsWriter.h"
 
 
 class HttpClient;
+class QNetworkAccessManager;
 class QTimer;
 
 
@@ -38,16 +38,22 @@ public:
 
 private Q_SLOTS:
     void onHeartbeatTick();
+    void onFileCheckTick();
+    void onFileDownloadDone( bool success, FileDownloader::PendingFile info, QString message );
 
 private:
     void registerWithServer();
     void sendHeartbeat();
     void fetchBlocklist( int newVersion );
+    void checkPendingFiles();
 
     ConfigLoader m_config;
     HttpClient* m_http;
+    QNetworkAccessManager* m_nam;
     HostsWriter m_hosts;
     QTimer* m_heartbeatTimer;
+    QTimer* m_fileCheckTimer;
+    bool m_fileCheckInFlight;
 
     int m_localVersion;
     bool m_localFocusActive;

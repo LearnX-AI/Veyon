@@ -2,10 +2,11 @@
 
 from fastapi import APIRouter
 
-from app.api import admin, blocklist, machines
+from app.api import admin, blocklist, files, machines
 
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(blocklist.router)
 api_router.include_router(machines.router)
+api_router.include_router(files.router)
 api_router.include_router(admin.router)
