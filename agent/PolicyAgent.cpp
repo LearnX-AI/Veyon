@@ -9,21 +9,31 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QJsonDocument>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QNetworkAccessManager>
 #include <QTimer>
+#include <QUrl>
 #include <QtDebug>
 
 
 PolicyAgent::PolicyAgent( QObject* parent ) :
     QObject( parent ),
     m_http( new HttpClient( this ) ),
+    m_nam( new QNetworkAccessManager( this ) ),
     m_hosts( QStringLiteral("/etc/hosts") ),
     m_heartbeatTimer( new QTimer( this ) ),
+    m_fileCheckTimer( new QTimer( this ) ),
+    m_fileCheckInFlight( false ),
     m_localVersion( 0 ),
     m_localFocusActive( false ),
     m_registered( false )
 {
     connect( m_heartbeatTimer, &QTimer::timeout,
              this, &PolicyAgent::onHeartbeatTick );
+    connect( m_fileCheckTimer, &QTimer::timeout,
+             this, &PolicyAgent::onFileCheckTick );
 }
 
 
@@ -52,7 +62,10 @@ bool PolicyAgent::start()
     registerWithServer();
 
     m_heartbeatTimer->start( m_config.heartbeatIntervalSeconds * 1000 );
-    qInfo().noquote() << "Heartbeat timer started.";
+    qInfo().noquote() << "Heartbeat timer started (" << m_config.heartbeatIntervalSeconds << "s).";
+
+    m_fileCheckTimer->start( m_config.fileCheckIntervalSeconds * 1000 );
+    qInfo().noquote() << "File check timer started (" << m_config.fileCheckIntervalSeconds << "s).";
     return true;
 }
 
@@ -60,6 +73,7 @@ bool PolicyAgent::start()
 void PolicyAgent::stop()
 {
     m_heartbeatTimer->stop();
+    m_fileCheckTimer->stop();
     qInfo().noquote() << "Agent stopped.";
 }
 
@@ -184,4 +198,106 @@ void PolicyAgent::fetchBlocklist( int newVersion )
                           << "blocked domain(s) to" << m_config.hostsFile
                           << "(version" << newVersion << ")";
     });
+}
+
+
+
+// =============================================================
+// File distribution
+// =============================================================
+
+void PolicyAgent::onFileCheckTick()
+{
+    if( !m_registered )
+    {
+        return;        // wait until heartbeat loop has us registered
+    }
+    if( m_fileCheckInFlight )
+    {
+        return;        // don't pile up requests while a download is in progress
+    }
+    checkPendingFiles();
+}
+
+
+void PolicyAgent::checkPendingFiles()
+{
+    m_fileCheckInFlight = true;
+
+    // /api/v1/files/pending - GET with X-Veyon-Hostname header.
+    // HttpClient doesn't expose per-request raw headers, so we do this directly.
+    const QUrl url( m_config.serverUrl + QStringLiteral("/api/v1/files/pending") );
+    QNetworkRequest req{ url };
+    req.setRawHeader( "Authorization",
+                      QByteArray("Bearer ") + m_config.adminToken.toUtf8() );
+    req.setRawHeader( "X-Veyon-Hostname", m_config.hostname.toUtf8() );
+
+    QNetworkReply* reply = m_nam->get( req );
+    connect( reply, &QNetworkReply::finished, this, [this, reply]() {
+        const int hc = reply->attribute(
+            QNetworkRequest::HttpStatusCodeAttribute ).toInt();
+
+        if( reply->error() != QNetworkReply::NoError || hc < 200 || hc >= 300 )
+        {
+            qWarning().noquote() << "[file] /pending failed (HTTP" << hc
+                                 << "):" << reply->errorString();
+            reply->deleteLater();
+            m_fileCheckInFlight = false;
+            return;
+        }
+
+        const QByteArray body = reply->readAll();
+        reply->deleteLater();
+
+        const QJsonDocument doc = QJsonDocument::fromJson( body );
+        if( !doc.isArray() )
+        {
+            m_fileCheckInFlight = false;
+            return;
+        }
+
+        const QJsonArray arr = doc.array();
+        if( arr.isEmpty() )
+        {
+            m_fileCheckInFlight = false;
+            return;       // nothing to do
+        }
+
+        // Take the FIRST pending file only. After it finishes, the next
+        // tick will pick up the next one. This avoids running parallel
+        // downloads which would compete for disk and bandwidth.
+        const QJsonObject obj = arr.first().toObject();
+        FileDownloader::PendingFile info;
+        info.distributionId = obj.value(QStringLiteral("distribution_id")).toInt();
+        info.fileId         = obj.value(QStringLiteral("file_id")).toInt();
+        info.storageId      = obj.value(QStringLiteral("storage_id")).toString();
+        info.filename       = obj.value(QStringLiteral("filename")).toString();
+        info.sha256         = obj.value(QStringLiteral("sha256")).toString();
+        info.sizeBytes      = static_cast<qint64>(
+            obj.value(QStringLiteral("size_bytes")).toDouble() );
+
+        auto* dl = new FileDownloader(
+            m_http, m_nam,
+            m_config.serverUrl, m_config.adminToken, m_config.hostname,
+            m_config.fileDestinationDir,
+            this );
+        connect( dl, &FileDownloader::done,
+                 this, &PolicyAgent::onFileDownloadDone );
+        dl->start( info );
+    });
+}
+
+
+void PolicyAgent::onFileDownloadDone(
+    bool success,
+    FileDownloader::PendingFile info,
+    QString message )
+{
+    Q_UNUSED( info )
+    Q_UNUSED( message )
+    Q_UNUSED( success )
+
+    // Reset the flag and let the FileDownloader self-destruct.
+    sender()->deleteLater();
+    m_fileCheckInFlight = false;
 }

@@ -63,6 +63,19 @@ bool ConfigLoader::load( const QString& path )
         {
             hostsFile = value;
         }
+        else if( key == QStringLiteral("file_destination_dir") )
+        {
+            fileDestinationDir = value;
+        }
+        else if( key == QStringLiteral("file_check_interval_seconds") )
+        {
+            bool ok = false;
+            const int v = value.toInt( &ok );
+            if( ok && v >= 2 )
+            {
+                fileCheckIntervalSeconds = v;
+            }
+        }
     }
 
     // Defaults
