@@ -241,3 +241,167 @@ def list_distributions(
         .order_by(FileDistribution.machine_id)
     )
     return list(db.scalars(stmt))
+
+
+# ---------------------------------------------------------------------------
+# Agent endpoints (called by veyon-policy-agent on student PCs)
+# ---------------------------------------------------------------------------
+
+from fastapi import Header                              # noqa: E402 (late import OK here)
+from app.schemas import AgentAckRequest, AgentPendingFile  # noqa: E402
+
+
+def _resolve_machine(
+    db: Session,
+    hostname: str | None,
+) -> Machine:
+    """Locate the machine row by hostname header. Required for all agent calls."""
+    if not hostname:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing X-Veyon-Hostname header",
+        )
+    machine = db.scalar(select(Machine).where(Machine.hostname == hostname))
+    if machine is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown machine '{hostname}'. Call /machines/register first.",
+        )
+    return machine
+
+
+@router.get("/pending", response_model=list[AgentPendingFile])
+def agent_pending_files(
+    db: Session = Depends(get_db),
+    _: str = Depends(verify_token),
+    x_veyon_hostname: str | None = Header(default=None),
+) -> list[AgentPendingFile]:
+    """
+    Return files this machine still needs to download.
+    Only entries in QUEUED state are returned (the agent re-asks on each tick).
+    """
+    machine = _resolve_machine(db, x_veyon_hostname)
+
+    stmt = (
+        select(FileDistribution, FileRecord)
+        .join(FileRecord, FileDistribution.file_id == FileRecord.id)
+        .where(
+            FileDistribution.machine_id == machine.id,
+            FileDistribution.status == DistributionStatus.QUEUED,
+        )
+        .order_by(FileDistribution.created_at)
+    )
+
+    out: list[AgentPendingFile] = []
+    for dist, rec in db.execute(stmt).all():
+        out.append(AgentPendingFile(
+            distribution_id=dist.id,
+            file_id=rec.id,
+            storage_id=rec.storage_id,
+            filename=rec.filename,
+            sha256=rec.sha256,
+            size_bytes=rec.size_bytes,
+        ))
+    return out
+
+
+@router.get("/{distribution_id}/download")
+async def agent_download_file(
+    distribution_id: int,
+    db: Session = Depends(get_db),
+    _: str = Depends(verify_token),
+    x_veyon_hostname: str | None = Header(default=None),
+) -> StreamingResponse:
+    """
+    Stream a queued file to the agent. Marks the distribution as
+    DOWNLOADING when the agent starts; the agent reports completion via /ack.
+    """
+    machine = _resolve_machine(db, x_veyon_hostname)
+
+    dist = db.get(FileDistribution, distribution_id)
+    if dist is None or dist.machine_id != machine.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Distribution not found for this machine.",
+        )
+    if dist.status == DistributionStatus.DELIVERED:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="This distribution has already been delivered.",
+        )
+
+    rec = db.get(FileRecord, dist.file_id)
+    if rec is None:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Underlying file no longer exists on the server.",
+        )
+
+    # Mark downloading; will flip to delivered/failed via /ack.
+    dist.status = DistributionStatus.DOWNLOADING
+    dist.bytes_received = 0
+    dist.error_message = None
+    db.commit()
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{rec.filename}"',
+        "X-Veyon-File-Sha256": rec.sha256,
+        "X-Veyon-File-Size":   str(rec.size_bytes),
+    }
+    return StreamingResponse(
+        iter_file_chunks(rec.storage_id, rec.filename),
+        media_type=rec.content_type or "application/octet-stream",
+        headers=headers,
+    )
+
+
+@router.post(
+    "/{distribution_id}/ack",
+    response_model=FileDistributionRead,
+)
+def agent_ack(
+    distribution_id: int,
+    payload: AgentAckRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(verify_token),
+    x_veyon_hostname: str | None = Header(default=None),
+) -> FileDistribution:
+    """Agent reports the outcome of a download attempt."""
+    machine = _resolve_machine(db, x_veyon_hostname)
+
+    dist = db.get(FileDistribution, distribution_id)
+    if dist is None or dist.machine_id != machine.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Distribution not found for this machine.",
+        )
+
+    dist.bytes_received = payload.bytes_received
+
+    if payload.success:
+        dist.status = DistributionStatus.DELIVERED
+        dist.error_message = None
+        dist.completed_at = datetime.now(UTC)
+        log_action(
+            db,
+            action="file.delivered",
+            target=machine.hostname,
+            details=f"distribution={dist.id}",
+            request=request,
+        )
+    else:
+        dist.status = DistributionStatus.FAILED
+        dist.error_message = payload.error_message
+        dist.completed_at = datetime.now(UTC)
+        log_action(
+            db,
+            action="file.failed",
+            target=machine.hostname,
+            details=(payload.error_message or "")[:500],
+            request=request,
+        )
+
+    db.commit()
+    db.refresh(dist)
+    return dist
