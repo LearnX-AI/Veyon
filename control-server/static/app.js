@@ -267,6 +267,11 @@ async function loadFileDistributions(fileId) {
     const target = $(`file-detail-${fileId}`);
     if (!target) return;
     try {
+        // Look up total file size for progress percentage display.
+        const allFiles = await apiRequest("/files");
+        const fileRec  = allFiles.find(f => f.id === fileId);
+        const totalBytes = fileRec ? fileRec.size_bytes : 1;
+
         const dists = await apiRequest(`/files/${fileId}/distributions`);
         if (dists.length === 0) {
             target.innerHTML = '<div class="muted">Not distributed yet.</div>';
@@ -276,11 +281,14 @@ async function loadFileDistributions(fileId) {
         target.innerHTML = dists.map(d => {
             const m = machinesById.get(d.machine_id);
             const label = m ? (m.label || m.hostname) : `Machine ${d.machine_id}`;
-            const pct = d.bytes_received && (d.status === "downloading" || d.status === "delivered")
-                ? Math.min(100, Math.floor((d.bytes_received / Math.max(1, fileSize)) * 100))
-                : (d.status === "delivered" ? 100 : (d.status === "failed" ? 100 : 0));
+            const pct =
+                  d.status === "delivered" ? 100
+                : d.status === "failed"    ? 100
+                : d.status === "downloading"
+                    ? Math.min(99, Math.floor((d.bytes_received / Math.max(1, totalBytes)) * 100))
+                    : 0;
             const barClass = d.status === "delivered" ? "status-bar-delivered"
-                           : d.status === "failed" ? "status-bar-failed" : "";
+                           : d.status === "failed"    ? "status-bar-failed" : "";
             return `
                 <div class="dist-row">
                     <div>${escapeHtml(label)}</div>
@@ -290,6 +298,7 @@ async function loadFileDistributions(fileId) {
             `;
         }).join("");
     } catch (err) {
+        console.error("loadFileDistributions failed:", err);
         target.innerHTML = '<div class="muted">Could not load status.</div>';
     }
 }

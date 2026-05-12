@@ -139,14 +139,45 @@ def delete_file(storage_id: str) -> bool:
     return True
 
 
-def cleanup_expired(now: datetime | None = None) -> int:
+def cleanup_expired_files(now: datetime | None = None) -> dict[str, int]:
     """
-    Called by the periodic janitor. Deletes files whose expires_at has passed.
-    Returns the count of files removed.
+    Delete files past their expires_at: removes disk content AND DB rows
+    (which cascades to file_distributions).
 
-    NOTE: this only removes disk content; DB row cleanup happens in
-    the same caller via SQLAlchemy.
+    Runs in a fresh DB session so it's safe to call from a background task.
+    Returns: {"removed": N, "skipped": M}
+      removed = successfully cleaned
+      skipped = errors (logged), not deleted
     """
-    # Caller passes in expired records; this function just acts on storage_ids.
-    # Kept as a placeholder for future signature; current callers use delete_file().
-    return 0
+    from app.db.database import SessionLocal
+    from app.models import FileRecord
+
+    when = now or datetime.now(UTC)
+    removed = 0
+    skipped = 0
+
+    db = SessionLocal()
+    try:
+        # Find all expired records
+        from sqlalchemy import select
+        stmt = select(FileRecord).where(FileRecord.expires_at < when)
+        expired = list(db.scalars(stmt))
+
+        for rec in expired:
+            try:
+                delete_file(rec.storage_id)   # remove bytes from disk
+                db.delete(rec)                # remove DB row (cascades)
+                removed += 1
+            except Exception as exc:
+                _log.warning(
+                    "Cleanup failed for file %s (storage_id=%s): %s",
+                    rec.id, rec.storage_id, exc,
+                )
+                skipped += 1
+
+        if removed > 0 or skipped > 0:
+            db.commit()
+    finally:
+        db.close()
+
+    return {"removed": removed, "skipped": skipped}
