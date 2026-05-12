@@ -9,6 +9,9 @@ import logging
 
 from pathlib import Path
 
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -18,6 +21,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from app.api import api_router
+from app.core.janitor import run_cleanup_loop
 from app.core.config import get_settings
 from app.db.database import Base, engine
 
@@ -28,6 +32,22 @@ _settings = get_settings()
 
 # Rate limiter: limits per-IP by default
 limiter = Limiter(key_func=get_remote_address, default_limits=[_settings.rate_limit_default])
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Manage background tasks alongside the app."""
+    # Startup: kick off the file cleanup janitor.
+    task = asyncio.create_task(run_cleanup_loop())
+    try:
+        yield
+    finally:
+        # Shutdown: cancel and wait for the task to wind down cleanly.
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 def create_app() -> FastAPI:
@@ -44,6 +64,7 @@ def create_app() -> FastAPI:
         )
 
     app = FastAPI(
+        lifespan=_lifespan,
         title=_settings.app_name,
         version=_settings.app_version,
         docs_url="/docs",

@@ -8,7 +8,9 @@
  * Required keys: server_url, admin_token
  * Optional keys: hostname (defaults to OS hostname),
  *                heartbeat_interval_seconds (defaults to 30),
- *                hosts_file (defaults to /etc/hosts)
+ *                hosts_file (defaults to /etc/hosts),
+ *                file_destination_dir (defaults to /var/lib/veyon/files/distributed),
+ *                file_check_interval_seconds (defaults to 10)
  */
 
 #pragma once
@@ -26,6 +28,10 @@ public:
     QString hostname;
     int heartbeatIntervalSeconds = 30;
     QString hostsFile = QStringLiteral("/etc/hosts");
+
+    // ---- File distribution ----
+    QString fileDestinationDir = QStringLiteral("/var/lib/veyon/files/distributed");
+    int fileCheckIntervalSeconds = 10;
 
     /// Load config. Returns false (and populates errorString) on failure.
     bool load( const QString& path = QString::fromLatin1( DefaultPath ) );

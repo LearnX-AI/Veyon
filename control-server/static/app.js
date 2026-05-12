@@ -11,6 +11,9 @@
 const STATE = {
     token: null,
     refreshTimer: null,
+    machines: [],
+    expandedFileId: null,
+    distributeFileId: null,
 };
 
 const TOKEN_KEY = "veyon_admin_token";
@@ -148,6 +151,7 @@ async function refreshBlocklist() {
 async function refreshMachines() {
     try {
         const machines = await apiRequest("/machines");
+        STATE.machines = machines;
         const list = $("machines");
         $("machines-count").textContent = `${machines.length} machine${machines.length !== 1 ? "s" : ""}`;
         if (machines.length === 0) {
@@ -194,9 +198,222 @@ async function refreshLog() {
     }
 }
 
+// ============================================================
+// Files
+// ============================================================
+
+function formatBytes(n) {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function timeSince(iso) {
+    const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    if (seconds < 60)   return `${seconds}s ago`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+async function refreshFiles() {
+    try {
+        const files = await apiRequest("/files");
+        const list = $("files-list");
+        const totalBytes = files.reduce((s, f) => s + f.size_bytes, 0);
+        $("files-summary").textContent =
+            files.length
+                ? `${files.length} file${files.length !== 1 ? "s" : ""} · ${formatBytes(totalBytes)}`
+                : "";
+
+        if (files.length === 0) {
+            list.innerHTML = '<li class="empty">No files uploaded yet.</li>';
+            return;
+        }
+
+        list.innerHTML = files.map(f => `
+            <li class="file-row ${STATE.expandedFileId === f.id ? "expanded" : ""}" data-file-id="${f.id}">
+                <div class="file-row-head" data-toggle-file="${f.id}">
+                    <div>
+                        <div class="file-name">${escapeHtml(f.filename)}</div>
+                        <div class="file-meta">
+                            ${formatBytes(f.size_bytes)} ·
+                            Uploaded ${timeSince(f.uploaded_at)}${f.note ? " · " + escapeHtml(f.note) : ""}
+                        </div>
+                    </div>
+                    <div class="file-actions">
+                        <button class="btn btn-primary" data-distribute-id="${f.id}" data-distribute-name="${escapeHtml(f.filename)}">Distribute</button>
+                        <button class="btn btn-danger"  data-delete-file-id="${f.id}" data-delete-file-name="${escapeHtml(f.filename)}">Delete</button>
+                    </div>
+                </div>
+                <div class="file-row-detail" id="file-detail-${f.id}">
+                    <div class="muted">Loading status...</div>
+                </div>
+            </li>
+        `).join("");
+
+        // If a row was open, repopulate it
+        if (STATE.expandedFileId) {
+            loadFileDistributions(STATE.expandedFileId);
+        }
+    } catch (err) {
+        if (err.status !== 401) console.error("refreshFiles:", err);
+        throw err;
+    }
+}
+
+async function loadFileDistributions(fileId) {
+    const target = $(`file-detail-${fileId}`);
+    if (!target) return;
+    try {
+        // Look up total file size for progress percentage display.
+        const allFiles = await apiRequest("/files");
+        const fileRec  = allFiles.find(f => f.id === fileId);
+        const totalBytes = fileRec ? fileRec.size_bytes : 1;
+
+        const dists = await apiRequest(`/files/${fileId}/distributions`);
+        if (dists.length === 0) {
+            target.innerHTML = '<div class="muted">Not distributed yet.</div>';
+            return;
+        }
+        const machinesById = new Map(STATE.machines.map(m => [m.id, m]));
+        target.innerHTML = dists.map(d => {
+            const m = machinesById.get(d.machine_id);
+            const label = m ? (m.label || m.hostname) : `Machine ${d.machine_id}`;
+            const pct =
+                  d.status === "delivered" ? 100
+                : d.status === "failed"    ? 100
+                : d.status === "downloading"
+                    ? Math.min(99, Math.floor((d.bytes_received / Math.max(1, totalBytes)) * 100))
+                    : 0;
+            const barClass = d.status === "delivered" ? "status-bar-delivered"
+                           : d.status === "failed"    ? "status-bar-failed" : "";
+            return `
+                <div class="dist-row">
+                    <div>${escapeHtml(label)}</div>
+                    <div class="dist-bar ${barClass}"><span style="width:${pct}%"></span></div>
+                    <div class="status-${d.status}">${d.status}</div>
+                </div>
+            `;
+        }).join("");
+    } catch (err) {
+        console.error("loadFileDistributions failed:", err);
+        target.innerHTML = '<div class="muted">Could not load status.</div>';
+    }
+}
+
+function toggleFileRow(fileId) {
+    STATE.expandedFileId = STATE.expandedFileId === fileId ? null : fileId;
+    refreshFiles();
+}
+
+async function deleteFile(fileId, fileName) {
+    if (!confirm(`Delete "${fileName}"? This also clears its distributions.`)) return;
+    try {
+        await apiRequest(`/files/${fileId}`, { method: "DELETE" });
+        showToast(`Deleted ${fileName}`, "success");
+        if (STATE.expandedFileId === fileId) STATE.expandedFileId = null;
+        await refreshAll();
+    } catch (err) {
+        showToast(err.message, "error");
+    }
+}
+
+// ----- Upload (XHR so we get progress events) -----
+
+function uploadFile(fileObj, note) {
+    return new Promise((resolve, reject) => {
+        const form = new FormData();
+        form.append("file", fileObj);
+        if (note) form.append("note", note);
+
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", `/api/v1${"/files/upload"}`);
+        xhr.setRequestHeader("Authorization", `Bearer ${STATE.token}`);
+
+        xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+                const pct = Math.floor((e.loaded / e.total) * 100);
+                $("upload-progress-fill").style.width = `${pct}%`;
+                $("upload-progress-label").textContent =
+                    `${formatBytes(e.loaded)} / ${formatBytes(e.total)} (${pct}%)`;
+            }
+        };
+
+        xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                resolve(JSON.parse(xhr.responseText));
+            } else {
+                let msg = `Upload failed (${xhr.status})`;
+                try { msg = JSON.parse(xhr.responseText).detail || msg; } catch {}
+                reject(new Error(msg));
+            }
+        };
+        xhr.onerror   = () => reject(new Error("Upload network error"));
+        xhr.onabort   = () => reject(new Error("Upload cancelled"));
+
+        xhr.send(form);
+    });
+}
+
+// ----- Distribute dialog -----
+
+function openDistributeDialog(fileId, fileName) {
+    STATE.distributeFileId = fileId;
+    $("distribute-dialog-title").textContent = "Distribute file";
+    $("distribute-dialog-sub").textContent = fileName;
+
+    const listEl = $("distribute-machine-list");
+    if (STATE.machines.length === 0) {
+        listEl.innerHTML = '<li class="empty">No machines registered yet.</li>';
+    } else {
+        listEl.innerHTML = STATE.machines.map(m => `
+            <li data-machine-id="${m.id}">
+                <input type="checkbox" data-machine-id="${m.id}">
+                <span>
+                    ${escapeHtml(m.label || m.hostname)}
+                    <small class="muted">${escapeHtml(m.hostname)}</small>
+                </span>
+            </li>
+        `).join("");
+    }
+    $("distribute-dialog").classList.remove("hidden");
+}
+
+function closeDistributeDialog() {
+    $("distribute-dialog").classList.add("hidden");
+    STATE.distributeFileId = null;
+}
+
+function getSelectedDistributeMachineIds() {
+    return Array.from(
+        document.querySelectorAll("#distribute-machine-list input[type=checkbox]:checked")
+    ).map(cb => parseInt(cb.dataset.machineId, 10));
+}
+
+async function sendDistribute() {
+    const ids = getSelectedDistributeMachineIds();
+    if (ids.length === 0) {
+        showToast("Pick at least one machine", "error");
+        return;
+    }
+    try {
+        await apiRequest(`/files/${STATE.distributeFileId}/distribute`, {
+            method: "POST",
+            body: { machine_ids: ids },
+        });
+        showToast(`Queued for ${ids.length} machine${ids.length !== 1 ? "s" : ""}`, "success");
+        closeDistributeDialog();
+        await refreshAll();
+    } catch (err) {
+        showToast(err.message, "error");
+    }
+}
+
 async function refreshAll() {
     try {
-        await Promise.all([refreshBlocklist(), refreshMachines(), refreshLog()]);
+        await Promise.all([refreshBlocklist(), refreshMachines(), refreshFiles(), refreshLog()]);
         setStatus(true, "Connected");
     } catch (err) {
         if (err.status === 401) {
@@ -249,6 +466,28 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Delegated click handler for remove + toggle buttons (re-rendered dynamically)
     document.body.addEventListener("click", async (e) => {
+
+        // File row expand/collapse
+        const toggleFile = e.target.closest("[data-toggle-file]");
+        if (toggleFile && !e.target.closest("[data-distribute-id]")
+                       && !e.target.closest("[data-delete-file-id]")) {
+            toggleFileRow(parseInt(toggleFile.dataset.toggleFile, 10));
+            return;
+        }
+        // Open Distribute dialog
+        const distBtn = e.target.dataset.distributeId;
+        if (distBtn) {
+            openDistributeDialog(parseInt(distBtn, 10),
+                                 e.target.dataset.distributeName);
+            return;
+        }
+        // Delete file
+        const delFileId = e.target.dataset.deleteFileId;
+        if (delFileId) {
+            deleteFile(parseInt(delFileId, 10), e.target.dataset.deleteFileName);
+            return;
+        }
+
         const removeId = e.target.dataset.removeId;
         if (removeId) {
             if (!confirm("Remove this domain from the blocklist?")) return;
@@ -273,6 +512,77 @@ document.addEventListener("DOMContentLoaded", () => {
             } catch (err) {
                 showToast(err.message, "error");
             }
+        }
+    });
+
+
+    // ---- Files: upload, file picker label, delegated row clicks ----
+
+    $("file-input").addEventListener("change", (e) => {
+        const f = e.target.files[0];
+        const label = $("file-input-label-text");
+        const parent = label.parentElement;
+        if (f) {
+            label.textContent = `${f.name} (${formatBytes(f.size)})`;
+            parent.classList.add("has-file");
+        } else {
+            label.textContent = "Choose file...";
+            parent.classList.remove("has-file");
+        }
+    });
+
+    $("upload-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fileObj = $("file-input").files[0];
+        if (!fileObj) return;
+        const note = $("file-note-input").value.trim() || null;
+
+        const progress = $("upload-progress");
+        const fill     = $("upload-progress-fill");
+        const label    = $("upload-progress-label");
+        const btn      = $("upload-btn");
+
+        btn.disabled = true;
+        progress.classList.remove("hidden");
+        fill.style.width = "0%";
+        label.textContent = "Starting...";
+
+        try {
+            await uploadFile(fileObj, note);
+            showToast(`Uploaded ${fileObj.name}`, "success");
+            $("upload-form").reset();
+            $("file-input-label-text").textContent = "Choose file...";
+            $("file-input-label-text").parentElement.classList.remove("has-file");
+            await refreshAll();
+        } catch (err) {
+            showToast(err.message, "error");
+        } finally {
+            btn.disabled = false;
+            progress.classList.add("hidden");
+        }
+    });
+
+    // Distribute dialog buttons
+    $("distribute-cancel").addEventListener("click", closeDistributeDialog);
+    $("distribute-send").addEventListener("click", sendDistribute);
+    $("distribute-select-all").addEventListener("click", () => {
+        document.querySelectorAll("#distribute-machine-list input[type=checkbox]")
+            .forEach(cb => cb.checked = true);
+    });
+    $("distribute-clear").addEventListener("click", () => {
+        document.querySelectorAll("#distribute-machine-list input[type=checkbox]")
+            .forEach(cb => cb.checked = false);
+    });
+    $("distribute-dialog").addEventListener("click", (e) => {
+        if (e.target.id === "distribute-dialog") closeDistributeDialog();
+    });
+    // Clicking a machine row in the dialog toggles its checkbox
+    $("distribute-machine-list").addEventListener("click", (e) => {
+        const li = e.target.closest("li[data-machine-id]");
+        if (!li) return;
+        if (e.target.tagName !== "INPUT") {
+            const cb = li.querySelector("input[type=checkbox]");
+            if (cb) cb.checked = !cb.checked;
         }
     });
 

@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # the dashboard's URL only.
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
 
+
+    # ---- File distribution ----
+    file_storage_root: str = "/var/lib/veyon-server/uploads"
+    file_retention_days: int = Field(default=7, ge=1, le=365)
+    file_max_size_bytes: int = Field(default=1_073_741_824, ge=1024)  # 1 GB default
+    file_cleanup_interval_seconds: int = Field(default=3600, ge=60)  # 1 hour
+
     @property
     def is_default_token(self) -> bool:
         return self.admin_token == "CHANGE_ME_IN_PRODUCTION"
