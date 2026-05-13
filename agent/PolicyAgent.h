@@ -16,6 +16,7 @@
 
 #include "ConfigLoader.h"
 #include "FileDownloader.h"
+#include "FolderSyncer.h"
 #include "HostsWriter.h"
 
 
@@ -40,6 +41,7 @@ private Q_SLOTS:
     void onHeartbeatTick();
     void onFileCheckTick();
     void onFileDownloadDone( bool success, FileDownloader::PendingFile info, QString message );
+    void onFolderSyncTick();
 
 private:
     void registerWithServer();
@@ -53,6 +55,8 @@ private:
     HostsWriter m_hosts;
     QTimer* m_heartbeatTimer;
     QTimer* m_fileCheckTimer;
+    QTimer* m_folderSyncTimer;
+    FolderSyncer* m_folderSyncer;
     bool m_fileCheckInFlight;
 
     int m_localVersion;

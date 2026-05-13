@@ -76,6 +76,19 @@ bool ConfigLoader::load( const QString& path )
                 fileCheckIntervalSeconds = v;
             }
         }
+        else if( key == QStringLiteral("submissions_root_dir") )
+        {
+            submissionsRootDir = value;
+        }
+        else if( key == QStringLiteral("folder_sync_interval_seconds") )
+        {
+            bool ok = false;
+            const int v = value.toInt( &ok );
+            if( ok && v >= 5 )
+            {
+                folderSyncIntervalSeconds = v;
+            }
+        }
     }
 
     // Defaults
