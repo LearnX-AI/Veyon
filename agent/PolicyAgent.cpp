@@ -4,6 +4,8 @@
 
 #include "PolicyAgent.h"
 
+#include "FolderSyncer.h"
+
 #include "../plugins/centralpolicy/HttpClient.h"
 
 #include <QJsonArray>
@@ -25,6 +27,8 @@ PolicyAgent::PolicyAgent( QObject* parent ) :
     m_hosts( QStringLiteral("/etc/hosts") ),
     m_heartbeatTimer( new QTimer( this ) ),
     m_fileCheckTimer( new QTimer( this ) ),
+    m_folderSyncTimer( new QTimer( this ) ),
+    m_folderSyncer( nullptr ),
     m_fileCheckInFlight( false ),
     m_localVersion( 0 ),
     m_localFocusActive( false ),
@@ -34,6 +38,8 @@ PolicyAgent::PolicyAgent( QObject* parent ) :
              this, &PolicyAgent::onHeartbeatTick );
     connect( m_fileCheckTimer, &QTimer::timeout,
              this, &PolicyAgent::onFileCheckTick );
+    connect( m_folderSyncTimer, &QTimer::timeout,
+             this, &PolicyAgent::onFolderSyncTick );
 }
 
 
@@ -66,6 +72,13 @@ bool PolicyAgent::start()
 
     m_fileCheckTimer->start( m_config.fileCheckIntervalSeconds * 1000 );
     qInfo().noquote() << "File check timer started (" << m_config.fileCheckIntervalSeconds << "s).";
+
+    m_folderSyncer = new FolderSyncer(
+        m_nam, m_config.serverUrl, m_config.adminToken,
+        m_config.hostname, m_config.submissionsRootDir, this );
+
+    m_folderSyncTimer->start( m_config.folderSyncIntervalSeconds * 1000 );
+    qInfo().noquote() << "Folder sync timer started (" << m_config.folderSyncIntervalSeconds << "s).";
     return true;
 }
 
@@ -74,6 +87,7 @@ void PolicyAgent::stop()
 {
     m_heartbeatTimer->stop();
     m_fileCheckTimer->stop();
+    m_folderSyncTimer->stop();
     qInfo().noquote() << "Agent stopped.";
 }
 
@@ -300,4 +314,15 @@ void PolicyAgent::onFileDownloadDone(
     // Reset the flag and let the FileDownloader self-destruct.
     sender()->deleteLater();
     m_fileCheckInFlight = false;
+}
+
+
+
+void PolicyAgent::onFolderSyncTick()
+{
+    if( !m_registered || m_folderSyncer == nullptr )
+    {
+        return;
+    }
+    m_folderSyncer->runOneTick();
 }
