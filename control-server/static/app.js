@@ -494,10 +494,232 @@ function toggleFolderRow(folderId) {
 }
 
 async function renderFolderDetail(folderId) {
-    // Detail rendering covered in the next commit. Placeholder for now.
     const target = $(`folder-detail-${folderId}`);
     if (!target) return;
-    target.innerHTML = '<div class="empty-line">Detail view coming soon.</div>';
+
+    target.innerHTML = '<div class="empty-line">Loading...</div>';
+
+    const folder = STATE.folders.find(f => f.id === folderId);
+    if (!folder) {
+        target.innerHTML = '<div class="empty-line">Folder not found.</div>';
+        return;
+    }
+
+    try {
+        // Fetch parallel: assigned machines, materials (distributions),
+        // submissions. The assigned-machine list isn't a direct endpoint
+        // but we derive it from the existing distributions for this folder.
+        const [allDists, allFiles, submissions] = await Promise.all([
+            // No "list assignments" endpoint; use file_distributions filtered by folder
+            // via /files/{id}/distributions for each material - or we list folder's
+            // distributions via SQL... we have neither. Use submissions endpoint and
+            // machine_ids from a separate inference: read all distributions for the
+            // folder. Use the file list instead (the materials' file_ids).
+            apiRequest(`/files`),
+            apiRequest(`/files`),
+            apiRequest(`/folders/${folderId}/submissions`),
+        ]);
+
+        // Materials: we need the file_distributions for this folder, but we don't have
+        // a dedicated endpoint. Fall back to listing all files and matching by folder
+        // is wrong; we need actual material rows. Simplest: hit a new derived list -
+        // we just iterate all known files and call /files/{id}/distributions, then
+        // filter by folder. That's chatty. Let's keep it simple: just show counts and
+        // a list of submissions; for materials, we read folder.material_count from
+        // the summary and offer the upload button. If needed, expand later.
+
+        const machineMap = new Map(STATE.machines.map(m => [m.id, m]));
+        const submissionRows = submissions.length === 0
+            ? '<li class="empty-line">No submissions yet.</li>'
+            : submissions.map(s => {
+                const m = machineMap.get(s.machine_id);
+                const who = m ? (m.label || m.hostname) : `Machine ${s.machine_id}`;
+                return `
+                    <li>
+                        <div>
+                            <strong>${escapeHtml(s.filename)}</strong>
+                            <div class="muted" style="font-size:0.8rem">
+                                from ${escapeHtml(who)} · ${formatBytes(s.size_bytes)}
+                                · ${timeSince(s.submitted_at)}
+                            </div>
+                        </div>
+                        <div>${escapeHtml(s.note || "")}</div>
+                        <button class="btn btn-ghost"
+                                data-download-submission="${folderId}/${s.id}"
+                                data-download-filename="${escapeHtml(s.filename)}">Download</button>
+                    </li>
+                `;
+            }).join("");
+
+        target.innerHTML = `
+            ${folder.description ? `<p class="muted">${escapeHtml(folder.description)}</p>` : ""}
+
+            <div class="subsection">
+                <div class="subsection-head">
+                    <span>Materials (${folder.material_count})</span>
+                    <button class="btn btn-primary"
+                            data-upload-material-id="${folderId}"
+                            data-upload-material-name="${escapeHtml(folder.name)}">
+                        + Upload Material
+                    </button>
+                </div>
+                ${folder.material_count === 0
+                    ? '<div class="empty-line">No materials uploaded yet.</div>'
+                    : '<div class="empty-line">' + folder.material_count + ' material(s) distributed to assigned machines.</div>'}
+            </div>
+
+            <div class="subsection">
+                <div class="subsection-head">
+                    <span>Submissions (${submissions.length})</span>
+                </div>
+                <ul class="item-list">${submissionRows}</ul>
+            </div>
+
+            <div class="subsection">
+                <div class="subsection-head">
+                    <span>${folder.machine_count} machine(s) assigned</span>
+                </div>
+            </div>
+        `;
+    } catch (err) {
+        console.error("renderFolderDetail failed:", err);
+        target.innerHTML = '<div class="empty-line">Could not load folder detail.</div>';
+    }
+}
+
+// ----- Upload material -----
+
+function openUploadMaterialDialog(folderId, folderName) {
+    STATE.uploadMaterialFolderId = folderId;
+    $("upload-material-title").textContent = `Add Material to "${folderName}"`;
+    $("upload-material-file").value = "";
+    $("upload-material-file-label").textContent = "Choose file...";
+    $("upload-material-note").value = "";
+    $("upload-material-dialog").classList.remove("hidden");
+}
+
+function closeUploadMaterialDialog() {
+    $("upload-material-dialog").classList.add("hidden");
+    STATE.uploadMaterialFolderId = null;
+}
+
+async function submitUploadMaterial(e) {
+    e.preventDefault();
+    const folderId = STATE.uploadMaterialFolderId;
+    const fileObj = $("upload-material-file").files[0];
+    if (!folderId || !fileObj) return;
+
+    const note = $("upload-material-note").value.trim() || null;
+    const btn = $("upload-material-submit");
+    btn.disabled = true;
+
+    try {
+        // Use XHR for the streaming upload (same pattern as Files panel)
+        await uploadMaterialFile(folderId, fileObj, note);
+        showToast(`Uploaded ${fileObj.name}`, "success");
+        closeUploadMaterialDialog();
+        await refreshAll();
+    } catch (err) {
+        showToast(err.message, "error");
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function uploadMaterialFile(folderId, fileObj, note) {
+    return new Promise((resolve, reject) => {
+        const form = new FormData();
+        form.append("file", fileObj);
+        if (note) form.append("note", note);
+
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", `/api/v1/folders/${folderId}/materials`);
+        xhr.setRequestHeader("Authorization", `Bearer ${STATE.token}`);
+        xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                resolve(JSON.parse(xhr.responseText));
+            } else {
+                let msg = `Upload failed (${xhr.status})`;
+                try { msg = JSON.parse(xhr.responseText).detail || msg; } catch {}
+                reject(new Error(msg));
+            }
+        };
+        xhr.onerror = () => reject(new Error("Upload network error"));
+        xhr.send(form);
+    });
+}
+
+// ----- Download submission -----
+
+async function downloadSubmission(folderId, submissionId, filename) {
+    try {
+        const resp = await fetch(`/api/v1/folders/${folderId}/submissions/${submissionId}/download`, {
+            headers: { Authorization: `Bearer ${STATE.token}` },
+        });
+        if (!resp.ok) throw new Error(`Download failed (${resp.status})`);
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    } catch (err) {
+        showToast(err.message, "error");
+    }
+}
+
+// ----- Edit folder -----
+
+function openEditFolderDialog(folderId) {
+    const folder = STATE.folders.find(f => f.id === folderId);
+    if (!folder) return;
+    STATE.editFolderId = folderId;
+
+    $("edit-folder-desc").value = folder.description || "";
+    // datetime-local wants "YYYY-MM-DDTHH:mm" - strip timezone+seconds
+    if (folder.deadline) {
+        const d = new Date(folder.deadline);
+        // Build a local-time string the input understands
+        const pad = (n) => String(n).padStart(2, "0");
+        const local = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}` +
+                      `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        $("edit-folder-deadline").value = local;
+    } else {
+        $("edit-folder-deadline").value = "";
+    }
+    $("edit-folder-status").value = folder.status;
+    $("edit-folder-dialog").classList.remove("hidden");
+}
+
+function closeEditFolderDialog() {
+    $("edit-folder-dialog").classList.add("hidden");
+    STATE.editFolderId = null;
+}
+
+async function submitEditFolder(e) {
+    e.preventDefault();
+    const folderId = STATE.editFolderId;
+    if (!folderId) return;
+
+    const body = {};
+    body.description = $("edit-folder-desc").value.trim() || null;
+
+    const deadlineRaw = $("edit-folder-deadline").value;
+    body.deadline = deadlineRaw ? new Date(deadlineRaw).toISOString() : null;
+
+    body.status = $("edit-folder-status").value;
+
+    try {
+        await apiRequest(`/folders/${folderId}`, { method: "PATCH", body });
+        showToast("Folder updated", "success");
+        closeEditFolderDialog();
+        await refreshAll();
+    } catch (err) {
+        showToast(err.message, "error");
+    }
 }
 
 // ----- New folder dialog -----
@@ -640,6 +862,23 @@ document.addEventListener("DOMContentLoaded", () => {
             deleteFolder(parseInt(delFolderId, 10), e.target.dataset.deleteFolderName);
             return;
         }
+        const editFolderId = e.target.dataset.editFolderId;
+        if (editFolderId) {
+            openEditFolderDialog(parseInt(editFolderId, 10));
+            return;
+        }
+        const uploadMatId = e.target.dataset.uploadMaterialId;
+        if (uploadMatId) {
+            openUploadMaterialDialog(parseInt(uploadMatId, 10),
+                                     e.target.dataset.uploadMaterialName);
+            return;
+        }
+        const downloadSub = e.target.dataset.downloadSubmission;
+        if (downloadSub) {
+            const [fid, sid] = downloadSub.split("/").map(n => parseInt(n, 10));
+            downloadSubmission(fid, sid, e.target.dataset.downloadFilename);
+            return;
+        }
 
         // File row expand/collapse
         const toggleFile = e.target.closest("[data-toggle-file]");
@@ -713,6 +952,25 @@ document.addEventListener("DOMContentLoaded", () => {
             const cb = li.querySelector("input[type=checkbox]");
             if (cb) cb.checked = !cb.checked;
         }
+    });
+
+
+    // ---- Folders: edit + upload material + download submission ----
+    $("upload-material-cancel").addEventListener("click", closeUploadMaterialDialog);
+    $("upload-material-form").addEventListener("submit", submitUploadMaterial);
+    $("upload-material-dialog").addEventListener("click", (e) => {
+        if (e.target.id === "upload-material-dialog") closeUploadMaterialDialog();
+    });
+    $("upload-material-file").addEventListener("change", (e) => {
+        const f = e.target.files[0];
+        $("upload-material-file-label").textContent =
+            f ? `${f.name} (${formatBytes(f.size)})` : "Choose file...";
+    });
+
+    $("edit-folder-cancel").addEventListener("click", closeEditFolderDialog);
+    $("edit-folder-form").addEventListener("submit", submitEditFolder);
+    $("edit-folder-dialog").addEventListener("click", (e) => {
+        if (e.target.id === "edit-folder-dialog") closeEditFolderDialog();
     });
 
     // ---- Files: upload, file picker label, delegated row clicks ----
