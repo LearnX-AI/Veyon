@@ -14,6 +14,10 @@ const STATE = {
     machines: [],
     expandedFileId: null,
     distributeFileId: null,
+    folders: [],
+    expandedFolderId: null,
+    uploadMaterialFolderId: null,
+    editFolderId: null,
 };
 
 const TOKEN_KEY = "veyon_admin_token";
@@ -411,9 +415,388 @@ async function sendDistribute() {
     }
 }
 
+// ============================================================
+// Folders
+// ============================================================
+
+function formatDate(iso, fallback = "—") {
+    if (!iso) return fallback;
+    const d = new Date(iso);
+    return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function formatDateTime(iso, fallback = "—") {
+    if (!iso) return fallback;
+    return new Date(iso).toLocaleString(undefined, {
+        year: "numeric", month: "short", day: "numeric",
+        hour: "2-digit", minute: "2-digit"
+    });
+}
+
+function deadlineMeta(iso) {
+    if (!iso) return "No deadline";
+    const due = new Date(iso);
+    const now = new Date();
+    const passed = due < now;
+    return passed
+        ? `Due: ${formatDate(iso)} (passed)`
+        : `Due: ${formatDate(iso)}`;
+}
+
+async function refreshFolders() {
+    try {
+        const folders = await apiRequest("/folders");
+        STATE.folders = folders;
+        const list = $("folders-list");
+
+        if (folders.length === 0) {
+            list.innerHTML = '<li class="empty">No shared folders yet.</li>';
+            return;
+        }
+
+        list.innerHTML = folders.map(f => `
+            <li class="folder-row ${STATE.expandedFolderId === f.id ? "expanded" : ""}"
+                data-folder-id="${f.id}">
+                <div class="folder-row-head" data-toggle-folder="${f.id}">
+                    <div class="folder-info">
+                        <div class="folder-name">
+                            ${escapeHtml(f.name)}
+                            <span class="status-badge status-${f.status}">${f.status}</span>
+                        </div>
+                        <div class="folder-meta">
+                            ${deadlineMeta(f.deadline)} ·
+                            ${f.machine_count} machine${f.machine_count !== 1 ? "s" : ""} ·
+                            ${f.material_count} material${f.material_count !== 1 ? "s" : ""} ·
+                            ${f.submission_count} submission${f.submission_count !== 1 ? "s" : ""}
+                        </div>
+                    </div>
+                    <div class="folder-actions-head">
+                        <button class="btn btn-ghost" data-edit-folder-id="${f.id}">Edit</button>
+                        <button class="btn btn-danger" data-delete-folder-id="${f.id}" data-delete-folder-name="${escapeHtml(f.name)}">Delete</button>
+                    </div>
+                </div>
+                <div class="folder-row-detail" id="folder-detail-${f.id}"></div>
+            </li>
+        `).join("");
+
+        if (STATE.expandedFolderId) {
+            renderFolderDetail(STATE.expandedFolderId);
+        }
+    } catch (err) {
+        if (err.status !== 401) console.error("refreshFolders:", err);
+        throw err;
+    }
+}
+
+function toggleFolderRow(folderId) {
+    STATE.expandedFolderId = STATE.expandedFolderId === folderId ? null : folderId;
+    refreshFolders();
+}
+
+async function renderFolderDetail(folderId) {
+    const target = $(`folder-detail-${folderId}`);
+    if (!target) return;
+
+    target.innerHTML = '<div class="empty-line">Loading...</div>';
+
+    const folder = STATE.folders.find(f => f.id === folderId);
+    if (!folder) {
+        target.innerHTML = '<div class="empty-line">Folder not found.</div>';
+        return;
+    }
+
+    try {
+        // Fetch parallel: assigned machines, materials (distributions),
+        // submissions. The assigned-machine list isn't a direct endpoint
+        // but we derive it from the existing distributions for this folder.
+        const [allDists, allFiles, submissions] = await Promise.all([
+            // No "list assignments" endpoint; use file_distributions filtered by folder
+            // via /files/{id}/distributions for each material - or we list folder's
+            // distributions via SQL... we have neither. Use submissions endpoint and
+            // machine_ids from a separate inference: read all distributions for the
+            // folder. Use the file list instead (the materials' file_ids).
+            apiRequest(`/files`),
+            apiRequest(`/files`),
+            apiRequest(`/folders/${folderId}/submissions`),
+        ]);
+
+        // Materials: we need the file_distributions for this folder, but we don't have
+        // a dedicated endpoint. Fall back to listing all files and matching by folder
+        // is wrong; we need actual material rows. Simplest: hit a new derived list -
+        // we just iterate all known files and call /files/{id}/distributions, then
+        // filter by folder. That's chatty. Let's keep it simple: just show counts and
+        // a list of submissions; for materials, we read folder.material_count from
+        // the summary and offer the upload button. If needed, expand later.
+
+        const machineMap = new Map(STATE.machines.map(m => [m.id, m]));
+        const submissionRows = submissions.length === 0
+            ? '<li class="empty-line">No submissions yet.</li>'
+            : submissions.map(s => {
+                const m = machineMap.get(s.machine_id);
+                const who = m ? (m.label || m.hostname) : `Machine ${s.machine_id}`;
+                return `
+                    <li>
+                        <div>
+                            <strong>${escapeHtml(s.filename)}</strong>
+                            <div class="muted" style="font-size:0.8rem">
+                                from ${escapeHtml(who)} · ${formatBytes(s.size_bytes)}
+                                · ${timeSince(s.submitted_at)}
+                            </div>
+                        </div>
+                        <div>${escapeHtml(s.note || "")}</div>
+                        <button class="btn btn-ghost"
+                                data-download-submission="${folderId}/${s.id}"
+                                data-download-filename="${escapeHtml(s.filename)}">Download</button>
+                    </li>
+                `;
+            }).join("");
+
+        target.innerHTML = `
+            ${folder.description ? `<p class="muted">${escapeHtml(folder.description)}</p>` : ""}
+
+            <div class="subsection">
+                <div class="subsection-head">
+                    <span>Materials (${folder.material_count})</span>
+                    <button class="btn btn-primary"
+                            data-upload-material-id="${folderId}"
+                            data-upload-material-name="${escapeHtml(folder.name)}">
+                        + Upload Material
+                    </button>
+                </div>
+                ${folder.material_count === 0
+                    ? '<div class="empty-line">No materials uploaded yet.</div>'
+                    : '<div class="empty-line">' + folder.material_count + ' material(s) distributed to assigned machines.</div>'}
+            </div>
+
+            <div class="subsection">
+                <div class="subsection-head">
+                    <span>Submissions (${submissions.length})</span>
+                </div>
+                <ul class="item-list">${submissionRows}</ul>
+            </div>
+
+            <div class="subsection">
+                <div class="subsection-head">
+                    <span>${folder.machine_count} machine(s) assigned</span>
+                </div>
+            </div>
+        `;
+    } catch (err) {
+        console.error("renderFolderDetail failed:", err);
+        target.innerHTML = '<div class="empty-line">Could not load folder detail.</div>';
+    }
+}
+
+// ----- Upload material -----
+
+function openUploadMaterialDialog(folderId, folderName) {
+    STATE.uploadMaterialFolderId = folderId;
+    $("upload-material-title").textContent = `Add Material to "${folderName}"`;
+    $("upload-material-file").value = "";
+    $("upload-material-file-label").textContent = "Choose file...";
+    $("upload-material-note").value = "";
+    $("upload-material-dialog").classList.remove("hidden");
+}
+
+function closeUploadMaterialDialog() {
+    $("upload-material-dialog").classList.add("hidden");
+    STATE.uploadMaterialFolderId = null;
+}
+
+async function submitUploadMaterial(e) {
+    e.preventDefault();
+    const folderId = STATE.uploadMaterialFolderId;
+    const fileObj = $("upload-material-file").files[0];
+    if (!folderId || !fileObj) return;
+
+    const note = $("upload-material-note").value.trim() || null;
+    const btn = $("upload-material-submit");
+    btn.disabled = true;
+
+    try {
+        // Use XHR for the streaming upload (same pattern as Files panel)
+        await uploadMaterialFile(folderId, fileObj, note);
+        showToast(`Uploaded ${fileObj.name}`, "success");
+        closeUploadMaterialDialog();
+        await refreshAll();
+    } catch (err) {
+        showToast(err.message, "error");
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function uploadMaterialFile(folderId, fileObj, note) {
+    return new Promise((resolve, reject) => {
+        const form = new FormData();
+        form.append("file", fileObj);
+        if (note) form.append("note", note);
+
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", `/api/v1/folders/${folderId}/materials`);
+        xhr.setRequestHeader("Authorization", `Bearer ${STATE.token}`);
+        xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                resolve(JSON.parse(xhr.responseText));
+            } else {
+                let msg = `Upload failed (${xhr.status})`;
+                try { msg = JSON.parse(xhr.responseText).detail || msg; } catch {}
+                reject(new Error(msg));
+            }
+        };
+        xhr.onerror = () => reject(new Error("Upload network error"));
+        xhr.send(form);
+    });
+}
+
+// ----- Download submission -----
+
+async function downloadSubmission(folderId, submissionId, filename) {
+    try {
+        const resp = await fetch(`/api/v1/folders/${folderId}/submissions/${submissionId}/download`, {
+            headers: { Authorization: `Bearer ${STATE.token}` },
+        });
+        if (!resp.ok) throw new Error(`Download failed (${resp.status})`);
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    } catch (err) {
+        showToast(err.message, "error");
+    }
+}
+
+// ----- Edit folder -----
+
+function openEditFolderDialog(folderId) {
+    const folder = STATE.folders.find(f => f.id === folderId);
+    if (!folder) return;
+    STATE.editFolderId = folderId;
+
+    $("edit-folder-desc").value = folder.description || "";
+    // datetime-local wants "YYYY-MM-DDTHH:mm" - strip timezone+seconds
+    if (folder.deadline) {
+        const d = new Date(folder.deadline);
+        // Build a local-time string the input understands
+        const pad = (n) => String(n).padStart(2, "0");
+        const local = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}` +
+                      `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        $("edit-folder-deadline").value = local;
+    } else {
+        $("edit-folder-deadline").value = "";
+    }
+    $("edit-folder-status").value = folder.status;
+    $("edit-folder-dialog").classList.remove("hidden");
+}
+
+function closeEditFolderDialog() {
+    $("edit-folder-dialog").classList.add("hidden");
+    STATE.editFolderId = null;
+}
+
+async function submitEditFolder(e) {
+    e.preventDefault();
+    const folderId = STATE.editFolderId;
+    if (!folderId) return;
+
+    const body = {};
+    body.description = $("edit-folder-desc").value.trim() || null;
+
+    const deadlineRaw = $("edit-folder-deadline").value;
+    body.deadline = deadlineRaw ? new Date(deadlineRaw).toISOString() : null;
+
+    body.status = $("edit-folder-status").value;
+
+    try {
+        await apiRequest(`/folders/${folderId}`, { method: "PATCH", body });
+        showToast("Folder updated", "success");
+        closeEditFolderDialog();
+        await refreshAll();
+    } catch (err) {
+        showToast(err.message, "error");
+    }
+}
+
+// ----- New folder dialog -----
+
+function openNewFolderDialog() {
+    $("new-folder-name").value = "";
+    $("new-folder-desc").value = "";
+    $("new-folder-deadline").value = "";
+
+    const listEl = $("new-folder-machine-list");
+    if (STATE.machines.length === 0) {
+        listEl.innerHTML = '<li class="empty">No machines registered yet.</li>';
+    } else {
+        listEl.innerHTML = STATE.machines.map(m => `
+            <li data-machine-id="${m.id}">
+                <input type="checkbox" data-machine-id="${m.id}">
+                <span>
+                    ${escapeHtml(m.label || m.hostname)}
+                    <small class="muted">${escapeHtml(m.hostname)}</small>
+                </span>
+            </li>
+        `).join("");
+    }
+    $("new-folder-dialog").classList.remove("hidden");
+}
+
+function closeNewFolderDialog() {
+    $("new-folder-dialog").classList.add("hidden");
+}
+
+async function submitNewFolder(e) {
+    e.preventDefault();
+    const name = $("new-folder-name").value.trim();
+    if (!name) return;
+
+    const machineIds = Array.from(
+        document.querySelectorAll("#new-folder-machine-list input[type=checkbox]:checked")
+    ).map(cb => parseInt(cb.dataset.machineId, 10));
+
+    const deadlineRaw = $("new-folder-deadline").value;
+    // datetime-local gives "YYYY-MM-DDTHH:mm" without timezone -- treat as local
+    const deadline = deadlineRaw ? new Date(deadlineRaw).toISOString() : null;
+
+    const body = {
+        name,
+        description: $("new-folder-desc").value.trim() || null,
+        deadline,
+        machine_ids: machineIds,
+    };
+
+    try {
+        await apiRequest("/folders", { method: "POST", body });
+        showToast(`Created folder "${name}"`, "success");
+        closeNewFolderDialog();
+        await refreshAll();
+    } catch (err) {
+        showToast(err.message, "error");
+    }
+}
+
+// ----- Delete folder -----
+
+async function deleteFolder(folderId, folderName) {
+    if (!confirm(`Delete "${folderName}" and ALL its materials and submissions?`)) return;
+    try {
+        await apiRequest(`/folders/${folderId}`, { method: "DELETE" });
+        showToast(`Deleted "${folderName}"`, "success");
+        if (STATE.expandedFolderId === folderId) STATE.expandedFolderId = null;
+        await refreshAll();
+    } catch (err) {
+        showToast(err.message, "error");
+    }
+}
+
 async function refreshAll() {
     try {
-        await Promise.all([refreshBlocklist(), refreshMachines(), refreshFiles(), refreshLog()]);
+        await Promise.all([refreshBlocklist(), refreshMachines(), refreshFiles(), refreshFolders(), refreshLog()]);
         setStatus(true, "Connected");
     } catch (err) {
         if (err.status === 401) {
@@ -467,6 +850,36 @@ document.addEventListener("DOMContentLoaded", () => {
     // Delegated click handler for remove + toggle buttons (re-rendered dynamically)
     document.body.addEventListener("click", async (e) => {
 
+        // Folder row expand/collapse
+        const toggleFolder = e.target.closest("[data-toggle-folder]");
+        if (toggleFolder && !e.target.closest("[data-edit-folder-id]")
+                         && !e.target.closest("[data-delete-folder-id]")) {
+            toggleFolderRow(parseInt(toggleFolder.dataset.toggleFolder, 10));
+            return;
+        }
+        const delFolderId = e.target.dataset.deleteFolderId;
+        if (delFolderId) {
+            deleteFolder(parseInt(delFolderId, 10), e.target.dataset.deleteFolderName);
+            return;
+        }
+        const editFolderId = e.target.dataset.editFolderId;
+        if (editFolderId) {
+            openEditFolderDialog(parseInt(editFolderId, 10));
+            return;
+        }
+        const uploadMatId = e.target.dataset.uploadMaterialId;
+        if (uploadMatId) {
+            openUploadMaterialDialog(parseInt(uploadMatId, 10),
+                                     e.target.dataset.uploadMaterialName);
+            return;
+        }
+        const downloadSub = e.target.dataset.downloadSubmission;
+        if (downloadSub) {
+            const [fid, sid] = downloadSub.split("/").map(n => parseInt(n, 10));
+            downloadSubmission(fid, sid, e.target.dataset.downloadFilename);
+            return;
+        }
+
         // File row expand/collapse
         const toggleFile = e.target.closest("[data-toggle-file]");
         if (toggleFile && !e.target.closest("[data-distribute-id]")
@@ -515,6 +928,50 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+
+
+    // ---- Folders: new folder dialog ----
+    $("new-folder-btn").addEventListener("click", openNewFolderDialog);
+    $("new-folder-cancel").addEventListener("click", closeNewFolderDialog);
+    $("new-folder-form").addEventListener("submit", submitNewFolder);
+    $("new-folder-select-all").addEventListener("click", () => {
+        document.querySelectorAll("#new-folder-machine-list input[type=checkbox]")
+            .forEach(cb => cb.checked = true);
+    });
+    $("new-folder-clear").addEventListener("click", () => {
+        document.querySelectorAll("#new-folder-machine-list input[type=checkbox]")
+            .forEach(cb => cb.checked = false);
+    });
+    $("new-folder-dialog").addEventListener("click", (e) => {
+        if (e.target.id === "new-folder-dialog") closeNewFolderDialog();
+    });
+    $("new-folder-machine-list").addEventListener("click", (e) => {
+        const li = e.target.closest("li[data-machine-id]");
+        if (!li) return;
+        if (e.target.tagName !== "INPUT") {
+            const cb = li.querySelector("input[type=checkbox]");
+            if (cb) cb.checked = !cb.checked;
+        }
+    });
+
+
+    // ---- Folders: edit + upload material + download submission ----
+    $("upload-material-cancel").addEventListener("click", closeUploadMaterialDialog);
+    $("upload-material-form").addEventListener("submit", submitUploadMaterial);
+    $("upload-material-dialog").addEventListener("click", (e) => {
+        if (e.target.id === "upload-material-dialog") closeUploadMaterialDialog();
+    });
+    $("upload-material-file").addEventListener("change", (e) => {
+        const f = e.target.files[0];
+        $("upload-material-file-label").textContent =
+            f ? `${f.name} (${formatBytes(f.size)})` : "Choose file...";
+    });
+
+    $("edit-folder-cancel").addEventListener("click", closeEditFolderDialog);
+    $("edit-folder-form").addEventListener("submit", submitEditFolder);
+    $("edit-folder-dialog").addEventListener("click", (e) => {
+        if (e.target.id === "edit-folder-dialog") closeEditFolderDialog();
+    });
 
     // ---- Files: upload, file picker label, delegated row clicks ----
 

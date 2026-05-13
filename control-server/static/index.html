@@ -77,6 +77,16 @@
                 <ul id="files-list" class="entry-list file-list"></ul>
             </section>
 
+
+            <!-- Shared Folders -->
+            <section class="panel panel-wide">
+                <div class="panel-head">
+                    <h2>Shared Folders</h2>
+                    <button class="btn btn-primary" id="new-folder-btn">+ New Folder</button>
+                </div>
+                <ul id="folders-list" class="entry-list folder-list"></ul>
+            </section>
+
             <!-- Audit log -->
             <section class="panel panel-wide">
                 <div class="panel-head">
@@ -113,6 +123,94 @@
                 <button type="button" class="btn btn-ghost" id="distribute-cancel">Cancel</button>
                 <button type="button" class="btn btn-primary" id="distribute-send">Send</button>
             </div>
+        </div>
+    </div>
+
+
+    <!-- New Folder dialog -->
+    <div id="new-folder-dialog" class="modal-overlay hidden">
+        <div class="modal-card modal-card-lg">
+            <h3>New Shared Folder</h3>
+            <form id="new-folder-form" autocomplete="off">
+                <label class="form-row">
+                    <span>Name</span>
+                    <input type="text" id="new-folder-name" required maxlength="255"
+                           placeholder="e.g. Math 101 - Assignment 1">
+                </label>
+                <label class="form-row">
+                    <span>Description (optional)</span>
+                    <textarea id="new-folder-desc" rows="2" maxlength="2000"
+                              placeholder="Brief description of the assignment"></textarea>
+                </label>
+                <label class="form-row">
+                    <span>Deadline (optional)</span>
+                    <input type="datetime-local" id="new-folder-deadline">
+                </label>
+                <div class="form-row">
+                    <span>Assign to machines</span>
+                    <div class="distribute-toolbar">
+                        <button type="button" class="btn btn-ghost" id="new-folder-select-all">Select all</button>
+                        <button type="button" class="btn btn-ghost" id="new-folder-clear">Clear</button>
+                    </div>
+                    <ul id="new-folder-machine-list" class="distribute-machines"></ul>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-ghost" id="new-folder-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Folder</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Upload Material dialog -->
+    <div id="upload-material-dialog" class="modal-overlay hidden">
+        <div class="modal-card">
+            <h3 id="upload-material-title">Add Material</h3>
+            <form id="upload-material-form" autocomplete="off">
+                <label class="form-row">
+                    <span>File</span>
+                    <label class="file-input-label" for="upload-material-file">
+                        <span id="upload-material-file-label">Choose file...</span>
+                    </label>
+                    <input type="file" id="upload-material-file" required>
+                </label>
+                <label class="form-row">
+                    <span>Note (optional)</span>
+                    <input type="text" id="upload-material-note" maxlength="500">
+                </label>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-ghost" id="upload-material-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="upload-material-submit">Upload</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Edit Folder dialog -->
+    <div id="edit-folder-dialog" class="modal-overlay hidden">
+        <div class="modal-card">
+            <h3>Edit Folder</h3>
+            <form id="edit-folder-form" autocomplete="off">
+                <label class="form-row">
+                    <span>Description</span>
+                    <textarea id="edit-folder-desc" rows="2" maxlength="2000"></textarea>
+                </label>
+                <label class="form-row">
+                    <span>Deadline</span>
+                    <input type="datetime-local" id="edit-folder-deadline">
+                </label>
+                <label class="form-row">
+                    <span>Status</span>
+                    <select id="edit-folder-status">
+                        <option value="open">Open</option>
+                        <option value="closed">Closed</option>
+                    </select>
+                </label>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-ghost" id="edit-folder-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
         </div>
     </div>
 
