@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     file_retention_days: int = Field(default=7, ge=1, le=365)
     file_max_size_bytes: int = Field(default=1_073_741_824, ge=1024)  # 1 GB default
     file_cleanup_interval_seconds: int = Field(default=3600, ge=60)  # 1 hour
+    submission_storage_root: str = "/var/lib/veyon-server/submissions"
 
     @property
     def is_default_token(self) -> bool:

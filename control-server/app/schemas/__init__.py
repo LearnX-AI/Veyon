@@ -10,17 +10,33 @@ from app.schemas.file import (
     FileRead,
 )
 from app.schemas.machine import MachineHeartbeat, MachineRead, MachineRegister
+from app.schemas.shared_folder import (
+    AgentFolderMaterial,
+    AgentFolderState,
+    FolderAssignRequest,
+    FolderCreate,
+    FolderRead,
+    FolderUpdate,
+    SubmissionRead,
+)
 
 __all__ = [
     "AdminActionRead",
     "AgentAckRequest",
+    "AgentFolderMaterial",
+    "AgentFolderState",
     "AgentPendingFile",
     "BlocklistEntryCreate",
     "BlocklistEntryRead",
     "DistributeRequest",
     "FileDistributionRead",
     "FileRead",
+    "FolderAssignRequest",
+    "FolderCreate",
+    "FolderRead",
+    "FolderUpdate",
     "MachineHeartbeat",
     "MachineRead",
     "MachineRegister",
+    "SubmissionRead",
 ]

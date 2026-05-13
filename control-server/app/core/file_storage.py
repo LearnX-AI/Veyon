@@ -181,3 +181,91 @@ def cleanup_expired_files(now: datetime | None = None) -> dict[str, int]:
         db.close()
 
     return {"removed": removed, "skipped": skipped}
+
+
+# ============================================================
+# Submissions storage (folder feature)
+# ============================================================
+#
+# Submissions live under a separate root from regular files so the
+# auto-cleanup janitor never touches them (submissions don't expire).
+# Layout: <submission_root>/<storage_id>/<safe-filename>
+
+def submission_storage_path(storage_id: str, filename: str) -> Path:
+    """Disk path for a submission file."""
+    root = Path(_settings().submission_storage_root)
+    return root / storage_id / filename
+
+
+def ensure_submission_root() -> None:
+    """Create the submission storage root if missing. Idempotent."""
+    Path(_settings().submission_storage_root).mkdir(parents=True, exist_ok=True)
+
+
+async def save_submission_stream(
+    upload_stream: AsyncIterator[bytes],
+    declared_filename: str,
+    max_bytes: int | None = None,
+) -> tuple[str, str, str, int]:
+    """
+    Same shape as save_upload_stream() but writes under the submission root.
+    Returns: (storage_id, safe_filename, sha256_hex, total_bytes)
+    """
+    settings = _settings()
+    limit = max_bytes if max_bytes is not None else settings.file_max_size_bytes
+
+    storage_id = str(uuid.uuid4())
+    safe_name = _safe_filename(declared_filename)
+    target = submission_storage_path(storage_id, safe_name)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    hasher = hashlib.sha256()
+    total = 0
+
+    try:
+        def _write_sync(chunk: bytes) -> None:
+            nonlocal total
+            total += len(chunk)
+            if total > limit:
+                raise ValueError(f"Submission exceeded size limit of {limit} bytes")
+            hasher.update(chunk)
+            _f.write(chunk)
+
+        with open(target, "wb") as _f:
+            async for chunk in upload_stream:
+                if not chunk:
+                    continue
+                await asyncio.to_thread(_write_sync, chunk)
+
+    except Exception:
+        shutil.rmtree(target.parent, ignore_errors=True)
+        raise
+
+    return storage_id, safe_name, hasher.hexdigest(), total
+
+
+async def iter_submission_chunks(storage_id: str, filename: str) -> AsyncIterator[bytes]:
+    """Stream a submission file back. Used when teachers download submissions."""
+    path = submission_storage_path(storage_id, filename)
+    if not path.is_file():
+        raise FileNotFoundError(str(path))
+
+    def _read_next(f: BinaryIO) -> bytes:
+        return f.read(CHUNK_SIZE)
+
+    with open(path, "rb") as f:
+        while True:
+            chunk = await asyncio.to_thread(_read_next, f)
+            if not chunk:
+                break
+            yield chunk
+
+
+def delete_submission(storage_id: str) -> bool:
+    """Remove a submission's disk directory. Returns True if anything was deleted."""
+    root = Path(_settings().submission_storage_root)
+    target = root / storage_id
+    if not target.exists():
+        return False
+    shutil.rmtree(target, ignore_errors=True)
+    return True
