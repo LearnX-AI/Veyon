@@ -40,6 +40,15 @@ class FileDistribution(Base):
         index=True,
     )
 
+    # Optional: ties this distribution to a shared folder. NULL for
+    # ad-hoc distributions that aren't part of an assignment.
+    folder_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("shared_folders.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     status: Mapped[DistributionStatus] = mapped_column(
         Enum(DistributionStatus, native_enum=False, length=20),
         nullable=False,
