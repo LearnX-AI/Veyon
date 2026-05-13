@@ -14,6 +14,10 @@ const STATE = {
     machines: [],
     expandedFileId: null,
     distributeFileId: null,
+    folders: [],
+    expandedFolderId: null,
+    uploadMaterialFolderId: null,
+    editFolderId: null,
 };
 
 const TOKEN_KEY = "veyon_admin_token";
@@ -411,9 +415,166 @@ async function sendDistribute() {
     }
 }
 
+// ============================================================
+// Folders
+// ============================================================
+
+function formatDate(iso, fallback = "—") {
+    if (!iso) return fallback;
+    const d = new Date(iso);
+    return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function formatDateTime(iso, fallback = "—") {
+    if (!iso) return fallback;
+    return new Date(iso).toLocaleString(undefined, {
+        year: "numeric", month: "short", day: "numeric",
+        hour: "2-digit", minute: "2-digit"
+    });
+}
+
+function deadlineMeta(iso) {
+    if (!iso) return "No deadline";
+    const due = new Date(iso);
+    const now = new Date();
+    const passed = due < now;
+    return passed
+        ? `Due: ${formatDate(iso)} (passed)`
+        : `Due: ${formatDate(iso)}`;
+}
+
+async function refreshFolders() {
+    try {
+        const folders = await apiRequest("/folders");
+        STATE.folders = folders;
+        const list = $("folders-list");
+
+        if (folders.length === 0) {
+            list.innerHTML = '<li class="empty">No shared folders yet.</li>';
+            return;
+        }
+
+        list.innerHTML = folders.map(f => `
+            <li class="folder-row ${STATE.expandedFolderId === f.id ? "expanded" : ""}"
+                data-folder-id="${f.id}">
+                <div class="folder-row-head" data-toggle-folder="${f.id}">
+                    <div class="folder-info">
+                        <div class="folder-name">
+                            ${escapeHtml(f.name)}
+                            <span class="status-badge status-${f.status}">${f.status}</span>
+                        </div>
+                        <div class="folder-meta">
+                            ${deadlineMeta(f.deadline)} ·
+                            ${f.machine_count} machine${f.machine_count !== 1 ? "s" : ""} ·
+                            ${f.material_count} material${f.material_count !== 1 ? "s" : ""} ·
+                            ${f.submission_count} submission${f.submission_count !== 1 ? "s" : ""}
+                        </div>
+                    </div>
+                    <div class="folder-actions-head">
+                        <button class="btn btn-ghost" data-edit-folder-id="${f.id}">Edit</button>
+                        <button class="btn btn-danger" data-delete-folder-id="${f.id}" data-delete-folder-name="${escapeHtml(f.name)}">Delete</button>
+                    </div>
+                </div>
+                <div class="folder-row-detail" id="folder-detail-${f.id}"></div>
+            </li>
+        `).join("");
+
+        if (STATE.expandedFolderId) {
+            renderFolderDetail(STATE.expandedFolderId);
+        }
+    } catch (err) {
+        if (err.status !== 401) console.error("refreshFolders:", err);
+        throw err;
+    }
+}
+
+function toggleFolderRow(folderId) {
+    STATE.expandedFolderId = STATE.expandedFolderId === folderId ? null : folderId;
+    refreshFolders();
+}
+
+async function renderFolderDetail(folderId) {
+    // Detail rendering covered in the next commit. Placeholder for now.
+    const target = $(`folder-detail-${folderId}`);
+    if (!target) return;
+    target.innerHTML = '<div class="empty-line">Detail view coming soon.</div>';
+}
+
+// ----- New folder dialog -----
+
+function openNewFolderDialog() {
+    $("new-folder-name").value = "";
+    $("new-folder-desc").value = "";
+    $("new-folder-deadline").value = "";
+
+    const listEl = $("new-folder-machine-list");
+    if (STATE.machines.length === 0) {
+        listEl.innerHTML = '<li class="empty">No machines registered yet.</li>';
+    } else {
+        listEl.innerHTML = STATE.machines.map(m => `
+            <li data-machine-id="${m.id}">
+                <input type="checkbox" data-machine-id="${m.id}">
+                <span>
+                    ${escapeHtml(m.label || m.hostname)}
+                    <small class="muted">${escapeHtml(m.hostname)}</small>
+                </span>
+            </li>
+        `).join("");
+    }
+    $("new-folder-dialog").classList.remove("hidden");
+}
+
+function closeNewFolderDialog() {
+    $("new-folder-dialog").classList.add("hidden");
+}
+
+async function submitNewFolder(e) {
+    e.preventDefault();
+    const name = $("new-folder-name").value.trim();
+    if (!name) return;
+
+    const machineIds = Array.from(
+        document.querySelectorAll("#new-folder-machine-list input[type=checkbox]:checked")
+    ).map(cb => parseInt(cb.dataset.machineId, 10));
+
+    const deadlineRaw = $("new-folder-deadline").value;
+    // datetime-local gives "YYYY-MM-DDTHH:mm" without timezone -- treat as local
+    const deadline = deadlineRaw ? new Date(deadlineRaw).toISOString() : null;
+
+    const body = {
+        name,
+        description: $("new-folder-desc").value.trim() || null,
+        deadline,
+        machine_ids: machineIds,
+    };
+
+    try {
+        await apiRequest("/folders", { method: "POST", body });
+        showToast(`Created folder "${name}"`, "success");
+        closeNewFolderDialog();
+        await refreshAll();
+    } catch (err) {
+        showToast(err.message, "error");
+    }
+}
+
+// ----- Delete folder -----
+
+async function deleteFolder(folderId, folderName) {
+    if (!confirm(`Delete "${folderName}" and ALL its materials and submissions?`)) return;
+    try {
+        await apiRequest(`/folders/${folderId}`, { method: "DELETE" });
+        showToast(`Deleted "${folderName}"`, "success");
+        if (STATE.expandedFolderId === folderId) STATE.expandedFolderId = null;
+        await refreshAll();
+    } catch (err) {
+        showToast(err.message, "error");
+    }
+}
+
 async function refreshAll() {
     try {
-        await Promise.all([refreshBlocklist(), refreshMachines(), refreshFiles(), refreshLog()]);
+        await Promise.all([refreshBlocklist(), refreshMachines(), refreshFiles(), refreshFolders(), refreshLog()]);
         setStatus(true, "Connected");
     } catch (err) {
         if (err.status === 401) {
@@ -467,6 +628,19 @@ document.addEventListener("DOMContentLoaded", () => {
     // Delegated click handler for remove + toggle buttons (re-rendered dynamically)
     document.body.addEventListener("click", async (e) => {
 
+        // Folder row expand/collapse
+        const toggleFolder = e.target.closest("[data-toggle-folder]");
+        if (toggleFolder && !e.target.closest("[data-edit-folder-id]")
+                         && !e.target.closest("[data-delete-folder-id]")) {
+            toggleFolderRow(parseInt(toggleFolder.dataset.toggleFolder, 10));
+            return;
+        }
+        const delFolderId = e.target.dataset.deleteFolderId;
+        if (delFolderId) {
+            deleteFolder(parseInt(delFolderId, 10), e.target.dataset.deleteFolderName);
+            return;
+        }
+
         // File row expand/collapse
         const toggleFile = e.target.closest("[data-toggle-file]");
         if (toggleFile && !e.target.closest("[data-distribute-id]")
@@ -515,6 +689,31 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+
+
+    // ---- Folders: new folder dialog ----
+    $("new-folder-btn").addEventListener("click", openNewFolderDialog);
+    $("new-folder-cancel").addEventListener("click", closeNewFolderDialog);
+    $("new-folder-form").addEventListener("submit", submitNewFolder);
+    $("new-folder-select-all").addEventListener("click", () => {
+        document.querySelectorAll("#new-folder-machine-list input[type=checkbox]")
+            .forEach(cb => cb.checked = true);
+    });
+    $("new-folder-clear").addEventListener("click", () => {
+        document.querySelectorAll("#new-folder-machine-list input[type=checkbox]")
+            .forEach(cb => cb.checked = false);
+    });
+    $("new-folder-dialog").addEventListener("click", (e) => {
+        if (e.target.id === "new-folder-dialog") closeNewFolderDialog();
+    });
+    $("new-folder-machine-list").addEventListener("click", (e) => {
+        const li = e.target.closest("li[data-machine-id]");
+        if (!li) return;
+        if (e.target.tagName !== "INPUT") {
+            const cb = li.querySelector("input[type=checkbox]");
+            if (cb) cb.checked = !cb.checked;
+        }
+    });
 
     // ---- Files: upload, file picker label, delegated row clicks ----
 
