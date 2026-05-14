@@ -18,6 +18,7 @@
 #include "FileDownloader.h"
 #include "FolderSyncer.h"
 #include "HostsWriter.h"
+#include "SessionMonitor.h"
 
 
 class HttpClient;
@@ -42,6 +43,7 @@ private Q_SLOTS:
     void onFileCheckTick();
     void onFileDownloadDone( bool success, FileDownloader::PendingFile info, QString message );
     void onFolderSyncTick();
+    void onSessionCheckTick();
 
 private:
     void registerWithServer();
@@ -56,7 +58,9 @@ private:
     QTimer* m_heartbeatTimer;
     QTimer* m_fileCheckTimer;
     QTimer* m_folderSyncTimer;
+    QTimer* m_sessionCheckTimer;
     FolderSyncer* m_folderSyncer;
+    SessionMonitor* m_sessionMonitor;
     bool m_fileCheckInFlight;
 
     int m_localVersion;

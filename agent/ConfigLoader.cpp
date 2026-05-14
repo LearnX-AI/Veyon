@@ -89,6 +89,15 @@ bool ConfigLoader::load( const QString& path )
                 folderSyncIntervalSeconds = v;
             }
         }
+        else if( key == QStringLiteral("session_check_interval_seconds") )
+        {
+            bool ok = false;
+            const int v = value.toInt( &ok );
+            if( ok && v >= 2 )
+            {
+                sessionCheckIntervalSeconds = v;
+            }
+        }
     }
 
     // Defaults

@@ -24,6 +24,8 @@ add_executable(veyon-policy-agent
     FolderSyncer.h
     SubmissionUploader.cpp
     SubmissionUploader.h
+    SessionMonitor.cpp
+    SessionMonitor.h
     ${CMAKE_SOURCE_DIR}/plugins/centralpolicy/HttpClient.cpp
     ${CMAKE_SOURCE_DIR}/plugins/centralpolicy/HttpClient.h
 )
