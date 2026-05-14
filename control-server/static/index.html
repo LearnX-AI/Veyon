@@ -87,6 +87,16 @@
                 <ul id="folders-list" class="entry-list folder-list"></ul>
             </section>
 
+
+            <!-- Sessions -->
+            <section class="panel panel-wide">
+                <div class="panel-head">
+                    <h2>Sessions</h2>
+                    <button class="btn btn-primary" id="new-session-btn">+ New Session</button>
+                </div>
+                <ul id="sessions-list" class="entry-list session-list"></ul>
+            </section>
+
             <!-- Audit log -->
             <section class="panel panel-wide">
                 <div class="panel-head">
@@ -209,6 +219,81 @@
                 <div class="modal-actions">
                     <button type="button" class="btn btn-ghost" id="edit-folder-cancel">Cancel</button>
                     <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
+    <!-- New Session dialog -->
+    <div id="new-session-dialog" class="modal-overlay hidden">
+        <div class="modal-card modal-card-lg">
+            <h3>New Session</h3>
+            <form id="new-session-form" autocomplete="off">
+                <label class="form-row">
+                    <span>Name</span>
+                    <input type="text" id="new-session-name" required maxlength="255"
+                           placeholder="e.g. Physics Lab - Period 3">
+                </label>
+
+                <div class="form-row">
+                    <span>Mode</span>
+                    <div class="mode-toggle">
+                        <button type="button" class="btn mode-btn active" data-mode="lab">Lab session</button>
+                        <button type="button" class="btn mode-btn" data-mode="exam">Exam</button>
+                    </div>
+                </div>
+
+                <label class="form-row">
+                    <span>Duration (minutes)</span>
+                    <input type="number" id="new-session-duration" required min="1" max="1440" value="60">
+                </label>
+
+                <label class="form-row">
+                    <span>Warnings (minutes before end, comma-separated)</span>
+                    <input type="text" id="new-session-warnings" value="10, 1"
+                           placeholder="e.g. 15, 5, 1">
+                </label>
+
+                <label class="form-row">
+                    <span>When time runs out</span>
+                    <select id="new-session-action">
+                        <option value="lock_screen">Lock screen</option>
+                        <option value="logout">Log out</option>
+                        <option value="shutdown">Shut down</option>
+                    </select>
+                </label>
+
+                <div class="form-row">
+                    <span>Assign to machines</span>
+                    <div class="distribute-toolbar">
+                        <button type="button" class="btn btn-ghost" id="new-session-select-all">Select all</button>
+                        <button type="button" class="btn btn-ghost" id="new-session-clear">Clear</button>
+                    </div>
+                    <ul id="new-session-machine-list" class="distribute-machines"></ul>
+                </div>
+
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-ghost" id="new-session-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Session</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Extend Session dialog -->
+    <div id="extend-session-dialog" class="modal-overlay hidden">
+        <div class="modal-card">
+            <h3>Extend Session</h3>
+            <p class="muted" id="extend-session-name"></p>
+            <form id="extend-session-form" autocomplete="off">
+                <label class="form-row">
+                    <span>Add minutes</span>
+                    <input type="number" id="extend-session-minutes" required min="1" max="1440" value="5">
+                </label>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-ghost" id="extend-session-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Extend</button>
                 </div>
             </form>
         </div>

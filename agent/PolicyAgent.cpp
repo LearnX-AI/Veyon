@@ -5,6 +5,7 @@
 #include "PolicyAgent.h"
 
 #include "FolderSyncer.h"
+#include "SessionMonitor.h"
 
 #include "../plugins/centralpolicy/HttpClient.h"
 
@@ -28,7 +29,9 @@ PolicyAgent::PolicyAgent( QObject* parent ) :
     m_heartbeatTimer( new QTimer( this ) ),
     m_fileCheckTimer( new QTimer( this ) ),
     m_folderSyncTimer( new QTimer( this ) ),
+    m_sessionCheckTimer( new QTimer( this ) ),
     m_folderSyncer( nullptr ),
+    m_sessionMonitor( nullptr ),
     m_fileCheckInFlight( false ),
     m_localVersion( 0 ),
     m_localFocusActive( false ),
@@ -40,6 +43,8 @@ PolicyAgent::PolicyAgent( QObject* parent ) :
              this, &PolicyAgent::onFileCheckTick );
     connect( m_folderSyncTimer, &QTimer::timeout,
              this, &PolicyAgent::onFolderSyncTick );
+    connect( m_sessionCheckTimer, &QTimer::timeout,
+             this, &PolicyAgent::onSessionCheckTick );
 }
 
 
@@ -79,6 +84,13 @@ bool PolicyAgent::start()
 
     m_folderSyncTimer->start( m_config.folderSyncIntervalSeconds * 1000 );
     qInfo().noquote() << "Folder sync timer started (" << m_config.folderSyncIntervalSeconds << "s).";
+
+    m_sessionMonitor = new SessionMonitor(
+        m_nam, m_config.serverUrl, m_config.adminToken,
+        m_config.hostname, this );
+
+    m_sessionCheckTimer->start( m_config.sessionCheckIntervalSeconds * 1000 );
+    qInfo().noquote() << "Session check timer started (" << m_config.sessionCheckIntervalSeconds << "s).";
     return true;
 }
 
@@ -88,6 +100,7 @@ void PolicyAgent::stop()
     m_heartbeatTimer->stop();
     m_fileCheckTimer->stop();
     m_folderSyncTimer->stop();
+    m_sessionCheckTimer->stop();
     qInfo().noquote() << "Agent stopped.";
 }
 
@@ -325,4 +338,15 @@ void PolicyAgent::onFolderSyncTick()
         return;
     }
     m_folderSyncer->runOneTick();
+}
+
+
+
+void PolicyAgent::onSessionCheckTick()
+{
+    if( !m_registered || m_sessionMonitor == nullptr )
+    {
+        return;
+    }
+    m_sessionMonitor->runOneTick();
 }

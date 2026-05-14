@@ -10,6 +10,15 @@ from app.schemas.file import (
     FileRead,
 )
 from app.schemas.machine import MachineHeartbeat, MachineRead, MachineRegister
+from app.schemas.session import (
+    AgentActiveSession,
+    AgentSessionEventReport,
+    SessionCreate,
+    SessionEventRead,
+    SessionExtendRequest,
+    SessionRead,
+    SessionUpdate,
+)
 from app.schemas.shared_folder import (
     AgentFolderMaterial,
     AgentFolderState,
@@ -23,9 +32,11 @@ from app.schemas.shared_folder import (
 __all__ = [
     "AdminActionRead",
     "AgentAckRequest",
+    "AgentActiveSession",
     "AgentFolderMaterial",
     "AgentFolderState",
     "AgentPendingFile",
+    "AgentSessionEventReport",
     "BlocklistEntryCreate",
     "BlocklistEntryRead",
     "DistributeRequest",
@@ -38,5 +49,10 @@ __all__ = [
     "MachineHeartbeat",
     "MachineRead",
     "MachineRegister",
+    "SessionCreate",
+    "SessionEventRead",
+    "SessionExtendRequest",
+    "SessionRead",
+    "SessionUpdate",
     "SubmissionRead",
 ]
