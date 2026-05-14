@@ -18,6 +18,11 @@ const STATE = {
     expandedFolderId: null,
     uploadMaterialFolderId: null,
     editFolderId: null,
+    sessions: [],
+    expandedSessionId: null,
+    extendSessionId: null,
+    newSessionMode: "lab",
+    countdownTimer: null,
 };
 
 const TOKEN_KEY = "veyon_admin_token";
@@ -794,9 +799,271 @@ async function deleteFolder(folderId, folderName) {
     }
 }
 
+// ============================================================
+// Sessions
+// ============================================================
+
+const SESSION_MODE_PRESETS = {
+    lab:  { duration: 60, warnings: "10, 1",          action: "lock_screen" },
+    exam: { duration: 90, warnings: "30, 15, 5, 1",   action: "logout"      },
+};
+
+function fmtRemaining(ms) {
+    if (ms <= 0) return "0:00";
+    const s = Math.floor(ms / 1000);
+    const m = Math.floor(s / 60);
+    const ss = s % 60;
+    return `${m}:${String(ss).padStart(2, "0")}`;
+}
+
+function updateRunningCountdowns() {
+    // Update all rows tagged data-ends-at, no API hit needed.
+    document.querySelectorAll("[data-ends-at]").forEach(el => {
+        const endsAt = new Date(el.dataset.endsAt).getTime();
+        const remaining = endsAt - Date.now();
+        el.textContent = remaining > 0
+            ? `ends in ${fmtRemaining(remaining)}`
+            : "time up";
+    });
+}
+
+async function refreshSessions() {
+    try {
+        const sessions = await apiRequest("/sessions");
+        STATE.sessions = sessions;
+        const list = $("sessions-list");
+        if (sessions.length === 0) {
+            list.innerHTML = '<li class="empty">No sessions yet.</li>';
+            return;
+        }
+        list.innerHTML = sessions.map(s => renderSessionRow(s)).join("");
+        if (STATE.expandedSessionId) renderSessionDetail(STATE.expandedSessionId);
+        updateRunningCountdowns();
+    } catch (err) {
+        if (err.status !== 401) console.error("refreshSessions:", err);
+        throw err;
+    }
+}
+
+function renderSessionRow(s) {
+    const isRunning = s.status === "running";
+    const isPaused  = s.status === "paused";
+
+    // Action buttons depending on state
+    let actions = "";
+    if (s.status === "scheduled") {
+        actions += `<button class="btn btn-primary" data-start-session="${s.id}">Start</button>`;
+        actions += `<button class="btn btn-danger" data-delete-session="${s.id}" data-delete-session-name="${escapeHtml(s.name)}">Delete</button>`;
+    } else if (isRunning) {
+        actions += `<button class="btn btn-ghost"   data-pause-session="${s.id}">Pause</button>`;
+        actions += `<button class="btn btn-ghost"   data-extend-session="${s.id}" data-extend-session-name="${escapeHtml(s.name)}">+ Time</button>`;
+        actions += `<button class="btn btn-danger"  data-cancel-session="${s.id}" data-cancel-session-name="${escapeHtml(s.name)}">End now</button>`;
+    } else if (isPaused) {
+        actions += `<button class="btn btn-primary" data-resume-session="${s.id}">Resume</button>`;
+        actions += `<button class="btn btn-ghost"   data-extend-session="${s.id}" data-extend-session-name="${escapeHtml(s.name)}">+ Time</button>`;
+        actions += `<button class="btn btn-danger"  data-cancel-session="${s.id}" data-cancel-session-name="${escapeHtml(s.name)}">End now</button>`;
+    } else {
+        // completed / cancelled
+        actions += `<button class="btn btn-danger" data-delete-session="${s.id}" data-delete-session-name="${escapeHtml(s.name)}">Delete</button>`;
+    }
+
+    const countdown = isRunning && s.ends_at
+        ? `<span class="session-countdown" data-ends-at="${s.ends_at}">…</span>`
+        : "";
+
+    const expanded = STATE.expandedSessionId === s.id ? "expanded" : "";
+
+    return `
+        <li class="session-row ${expanded}" data-session-id="${s.id}">
+            <div class="session-row-head" data-toggle-session="${s.id}">
+                <div class="session-info">
+                    <div class="session-name">
+                        ${escapeHtml(s.name)}
+                        <span class="status-badge status-${s.status}">${s.status}</span>
+                        <span class="muted" style="font-size:0.75rem">${s.mode}</span>
+                        ${countdown}
+                    </div>
+                    <div class="session-meta">
+                        ${s.duration_minutes} min ·
+                        ${s.machine_count} machine${s.machine_count !== 1 ? "s" : ""} ·
+                        action: ${s.timeout_action.replace("_", " ")}
+                    </div>
+                </div>
+                <div class="session-actions">${actions}</div>
+            </div>
+            <div class="session-row-detail" id="session-detail-${s.id}"></div>
+        </li>
+    `;
+}
+
+function toggleSessionRow(sessionId) {
+    STATE.expandedSessionId = STATE.expandedSessionId === sessionId ? null : sessionId;
+    refreshSessions();
+}
+
+async function renderSessionDetail(sessionId) {
+    const target = $(`session-detail-${sessionId}`);
+    if (!target) return;
+    try {
+        const events = await apiRequest(`/sessions/${sessionId}/events`);
+        if (events.length === 0) {
+            target.innerHTML = '<div class="empty-line">No events yet.</div>';
+            return;
+        }
+        const machineMap = new Map(STATE.machines.map(m => [m.id, m]));
+        target.innerHTML = `
+            <div class="subsection">
+                <div class="subsection-head"><span>Event history (${events.length})</span></div>
+                <ul class="event-timeline">${
+                    events.map(e => {
+                        const m = e.machine_id ? machineMap.get(e.machine_id) : null;
+                        const who = m ? (m.label || m.hostname) : "session";
+                        return `
+                            <li>
+                                <span class="event-type">${e.event_type}</span>
+                                <span>
+                                    <strong>${escapeHtml(who)}</strong>
+                                    ${e.details ? ' · ' + escapeHtml(e.details) : ''}
+                                </span>
+                                <span class="muted">${formatDateTime(e.occurred_at)}</span>
+                            </li>
+                        `;
+                    }).join("")
+                }</ul>
+            </div>
+        `;
+    } catch (err) {
+        target.innerHTML = '<div class="empty-line">Could not load events.</div>';
+    }
+}
+
+// ----- New Session dialog -----
+
+function openNewSessionDialog() {
+    STATE.newSessionMode = "lab";
+    document.querySelectorAll("#new-session-dialog .mode-btn").forEach(b => {
+        b.classList.toggle("active", b.dataset.mode === "lab");
+    });
+    applyModePreset("lab");
+    $("new-session-name").value = "";
+
+    const listEl = $("new-session-machine-list");
+    if (STATE.machines.length === 0) {
+        listEl.innerHTML = '<li class="empty">No machines registered yet.</li>';
+    } else {
+        listEl.innerHTML = STATE.machines.map(m => `
+            <li data-machine-id="${m.id}">
+                <input type="checkbox" data-machine-id="${m.id}">
+                <span>
+                    ${escapeHtml(m.label || m.hostname)}
+                    <small class="muted">${escapeHtml(m.hostname)}</small>
+                </span>
+            </li>
+        `).join("");
+    }
+    $("new-session-dialog").classList.remove("hidden");
+}
+
+function applyModePreset(mode) {
+    const p = SESSION_MODE_PRESETS[mode];
+    if (!p) return;
+    $("new-session-duration").value = p.duration;
+    $("new-session-warnings").value = p.warnings;
+    $("new-session-action").value   = p.action;
+}
+
+function closeNewSessionDialog() {
+    $("new-session-dialog").classList.add("hidden");
+}
+
+function parseWarningList(raw) {
+    return raw.split(",").map(s => parseInt(s.trim(), 10)).filter(n => n > 0);
+}
+
+async function submitNewSession(e) {
+    e.preventDefault();
+    const name = $("new-session-name").value.trim();
+    if (!name) return;
+
+    const duration = parseInt($("new-session-duration").value, 10);
+    const warnings = parseWarningList($("new-session-warnings").value);
+
+    const machineIds = Array.from(
+        document.querySelectorAll("#new-session-machine-list input[type=checkbox]:checked")
+    ).map(cb => parseInt(cb.dataset.machineId, 10));
+
+    const body = {
+        name,
+        mode: STATE.newSessionMode,
+        duration_minutes: duration,
+        warning_minutes: warnings,
+        timeout_action: $("new-session-action").value,
+        machine_ids: machineIds,
+    };
+
+    try {
+        await apiRequest("/sessions", { method: "POST", body });
+        showToast(`Created session "${name}"`, "success");
+        closeNewSessionDialog();
+        await refreshAll();
+    } catch (err) {
+        showToast(err.message, "error");
+    }
+}
+
+// ----- Lifecycle controls -----
+
+async function controlSession(action, sessionId, opts = {}) {
+    try {
+        const path = `/sessions/${sessionId}/${action}`;
+        const body = opts.body || undefined;
+        await apiRequest(path, { method: "POST", body });
+        showToast(`Session ${action}`, "success");
+        await refreshAll();
+    } catch (err) {
+        showToast(err.message, "error");
+    }
+}
+
+async function deleteSession(sessionId, name) {
+    if (!confirm(`Delete "${name}"?`)) return;
+    try {
+        await apiRequest(`/sessions/${sessionId}`, { method: "DELETE" });
+        showToast(`Deleted "${name}"`, "success");
+        if (STATE.expandedSessionId === sessionId) STATE.expandedSessionId = null;
+        await refreshAll();
+    } catch (err) {
+        showToast(err.message, "error");
+    }
+}
+
+// ----- Extend dialog -----
+
+function openExtendDialog(sessionId, name) {
+    STATE.extendSessionId = sessionId;
+    $("extend-session-name").textContent = name;
+    $("extend-session-minutes").value = 5;
+    $("extend-session-dialog").classList.remove("hidden");
+}
+
+function closeExtendDialog() {
+    $("extend-session-dialog").classList.add("hidden");
+    STATE.extendSessionId = null;
+}
+
+async function submitExtendSession(e) {
+    e.preventDefault();
+    const id = STATE.extendSessionId;
+    if (!id) return;
+    const minutes = parseInt($("extend-session-minutes").value, 10);
+    if (!minutes || minutes < 1) return;
+    await controlSession("extend", id, { body: { minutes } });
+    closeExtendDialog();
+}
+
 async function refreshAll() {
     try {
-        await Promise.all([refreshBlocklist(), refreshMachines(), refreshFiles(), refreshFolders(), refreshLog()]);
+        await Promise.all([refreshBlocklist(), refreshMachines(), refreshFiles(), refreshFolders(), refreshSessions(), refreshLog()]);
         setStatus(true, "Connected");
     } catch (err) {
         if (err.status === 401) {
@@ -880,6 +1147,49 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
+        // ---- Session controls ----
+        const toggleSession = e.target.closest("[data-toggle-session]");
+        if (toggleSession
+            && !e.target.closest("[data-start-session]")
+            && !e.target.closest("[data-pause-session]")
+            && !e.target.closest("[data-resume-session]")
+            && !e.target.closest("[data-extend-session]")
+            && !e.target.closest("[data-cancel-session]")
+            && !e.target.closest("[data-delete-session]")) {
+            toggleSessionRow(parseInt(toggleSession.dataset.toggleSession, 10));
+            return;
+        }
+        if (e.target.dataset.startSession) {
+            controlSession("start", parseInt(e.target.dataset.startSession, 10));
+            return;
+        }
+        if (e.target.dataset.pauseSession) {
+            controlSession("pause", parseInt(e.target.dataset.pauseSession, 10));
+            return;
+        }
+        if (e.target.dataset.resumeSession) {
+            controlSession("resume", parseInt(e.target.dataset.resumeSession, 10));
+            return;
+        }
+        if (e.target.dataset.extendSession) {
+            openExtendDialog(parseInt(e.target.dataset.extendSession, 10),
+                             e.target.dataset.extendSessionName);
+            return;
+        }
+        if (e.target.dataset.cancelSession) {
+            const id = parseInt(e.target.dataset.cancelSession, 10);
+            const name = e.target.dataset.cancelSessionName;
+            if (confirm(`End "${name}" now without firing the timeout action?`)) {
+                controlSession("cancel", id);
+            }
+            return;
+        }
+        if (e.target.dataset.deleteSession) {
+            deleteSession(parseInt(e.target.dataset.deleteSession, 10),
+                          e.target.dataset.deleteSessionName);
+            return;
+        }
+
         // File row expand/collapse
         const toggleFile = e.target.closest("[data-toggle-file]");
         if (toggleFile && !e.target.closest("[data-distribute-id]")
@@ -929,6 +1239,50 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
 
+
+
+    // ---- Sessions: new session dialog ----
+    $("new-session-btn").addEventListener("click", openNewSessionDialog);
+    $("new-session-cancel").addEventListener("click", closeNewSessionDialog);
+    $("new-session-form").addEventListener("submit", submitNewSession);
+    $("new-session-select-all").addEventListener("click", () => {
+        document.querySelectorAll("#new-session-machine-list input[type=checkbox]")
+            .forEach(cb => cb.checked = true);
+    });
+    $("new-session-clear").addEventListener("click", () => {
+        document.querySelectorAll("#new-session-machine-list input[type=checkbox]")
+            .forEach(cb => cb.checked = false);
+    });
+    $("new-session-dialog").addEventListener("click", (e) => {
+        if (e.target.id === "new-session-dialog") closeNewSessionDialog();
+    });
+    $("new-session-machine-list").addEventListener("click", (e) => {
+        const li = e.target.closest("li[data-machine-id]");
+        if (!li) return;
+        if (e.target.tagName !== "INPUT") {
+            const cb = li.querySelector("input[type=checkbox]");
+            if (cb) cb.checked = !cb.checked;
+        }
+    });
+    document.querySelectorAll("#new-session-dialog .mode-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+            STATE.newSessionMode = btn.dataset.mode;
+            document.querySelectorAll("#new-session-dialog .mode-btn").forEach(b => {
+                b.classList.toggle("active", b === btn);
+            });
+            applyModePreset(btn.dataset.mode);
+        });
+    });
+
+    // ---- Sessions: extend dialog ----
+    $("extend-session-cancel").addEventListener("click", closeExtendDialog);
+    $("extend-session-form").addEventListener("submit", submitExtendSession);
+    $("extend-session-dialog").addEventListener("click", (e) => {
+        if (e.target.id === "extend-session-dialog") closeExtendDialog();
+    });
+
+    // ---- Sessions: per-second countdown ticker ----
+    STATE.countdownTimer = setInterval(updateRunningCountdowns, 1000);
 
     // ---- Folders: new folder dialog ----
     $("new-folder-btn").addEventListener("click", openNewFolderDialog);

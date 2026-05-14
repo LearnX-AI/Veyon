@@ -12,7 +12,8 @@
  *                file_destination_dir (defaults to /var/lib/veyon/files/distributed),
  *                file_check_interval_seconds (defaults to 10),
  *                submissions_root_dir (defaults to /var/lib/veyon/submissions),
- *                folder_sync_interval_seconds (defaults to 15)
+ *                folder_sync_interval_seconds (defaults to 15),
+ *                session_check_interval_seconds (defaults to 10)
  */
 
 #pragma once
@@ -38,6 +39,9 @@ public:
     // ---- Shared folders / submissions ----
     QString submissionsRootDir = QStringLiteral("/var/lib/veyon/submissions");
     int folderSyncIntervalSeconds = 15;
+
+    // ---- Time-limited sessions ----
+    int sessionCheckIntervalSeconds = 10;
 
     /// Load config. Returns false (and populates errorString) on failure.
     bool load( const QString& path = QString::fromLatin1( DefaultPath ) );

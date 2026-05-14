@@ -6,6 +6,14 @@ from app.models.file import FileRecord
 from app.models.file_distribution import DistributionStatus, FileDistribution
 from app.models.folder_assignment import FolderAssignment
 from app.models.machine import Machine
+from app.models.session import (
+    Session,
+    SessionMode,
+    SessionStatus,
+    TimeoutAction,
+)
+from app.models.session_event import SessionEvent, SessionEventType
+from app.models.session_machine import SessionMachine
 from app.models.shared_folder import FolderStatus, SharedFolder
 from app.models.submission import Submission
 
@@ -18,6 +26,13 @@ __all__ = [
     "FolderAssignment",
     "FolderStatus",
     "Machine",
+    "Session",
+    "SessionEvent",
+    "SessionEventType",
+    "SessionMachine",
+    "SessionMode",
+    "SessionStatus",
     "SharedFolder",
     "Submission",
+    "TimeoutAction",
 ]
